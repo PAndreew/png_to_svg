@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SVG Layer Editor</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #1a1a2e;
+    --panel:    #16213e;
+    --surface:  #0f3460;
+    --accent:   #e94560;
+    --accent2:  #53c0f0;
+    --text:     #e0e0e0;
+    --muted:    #7a8ba0;
+    --border:   #2a3a55;
+    --hover:    #1a3a60;
+    --selected: #e9456022;
+    --radius:   6px;
+  }
+
+  body { display: flex; flex-direction: column; height: 100vh; background: var(--bg);
+         color: var(--text); font: 13px/1.5 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
+
+  /* ── Toolbar ─────────────────────────────────────────────────────── */
+  #toolbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px; background: var(--panel);
+    border-bottom: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap;
+  }
+  #toolbar .brand { font-weight: 700; font-size: 15px; color: var(--accent2);
+                    letter-spacing: .5px; margin-right: 8px; white-space: nowrap; }
+  .tb-sep { width: 1px; height: 22px; background: var(--border); margin: 0 4px; flex-shrink: 0; }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 10px; background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    cursor: pointer; font: inherit; font-size: 12px; white-space: nowrap;
+    transition: background .15s, border-color .15s;
+  }
+  .btn:hover { background: var(--hover); border-color: var(--accent2); }
+  .btn.danger { border-color: #a03030; }
+  .btn.danger:hover { background: #3a1515; border-color: var(--accent); }
+  .btn svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+  #tool-group { display: flex; gap: 4px; }
+  .tool-btn {
+    width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    cursor: pointer; transition: background .15s, border-color .15s;
+  }
+  .tool-btn:hover    { background: var(--hover); border-color: var(--accent2); }
+  .tool-btn.active   { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .tool-btn svg      { width: 15px; height: 15px; }
+
+  #zoom-label { color: var(--muted); font-size: 12px; min-width: 42px; text-align: right; }
+
+  /* ── Main layout ──────────────────────────────────────────────────── */
+  #main { display: flex; flex: 1; overflow: hidden; }
+
+  /* ── Sidebar ──────────────────────────────────────────────────────── */
+  #sidebar {
+    width: 220px; flex-shrink: 0; background: var(--panel);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .panel-title {
+    padding: 8px 12px; font-size: 11px; font-weight: 700; letter-spacing: .8px;
+    text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  #layer-list { flex: 1; overflow-y: auto; }
+  .layer-item {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px; cursor: pointer; border-bottom: 1px solid var(--border);
+    transition: background .12s;
+  }
+  .layer-item:hover    { background: var(--hover); }
+  .layer-item.selected { background: var(--selected); }
+
+  .layer-swatch {
+    width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0;
+    border: 1px solid rgba(255,255,255,.15);
+  }
+  .layer-name  { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .layer-eye   { flex-shrink: 0; cursor: pointer; opacity: .7; }
+  .layer-eye:hover { opacity: 1; }
+  .layer-eye svg   { width: 14px; height: 14px; }
+
+  /* drag-reorder highlight */
+  .layer-item.drag-over { border-top: 2px solid var(--accent2); }
+
+  /* ── Canvas area ─────────────────────────────────────────────────── */
+  #canvas-wrap {
+    flex: 1; overflow: hidden; position: relative;
+    background: #111827;
+    background-image:
+      linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+  #canvas-wrap.drag-over-canvas { outline: 2px dashed var(--accent2); outline-offset: -4px; }
+
+  #drop-hint {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px;
+    color: var(--muted); pointer-events: none;
+    transition: opacity .2s;
+  }
+  #drop-hint svg { width: 56px; height: 56px; opacity: .4; }
+  #drop-hint p   { font-size: 15px; }
+  #drop-hint small { font-size: 12px; opacity: .6; }
+
+  #svg-container {
+    position: absolute; transform-origin: 0 0;
+    cursor: default;
+  }
+  #svg-container svg { display: block; }
+
+  /* selection ring injected via JS */
+  .sel-ring { outline: 2px solid var(--accent2); outline-offset: 1px; }
+
+  /* ── Properties panel ────────────────────────────────────────────── */
+  #props {
+    width: 200px; flex-shrink: 0; background: var(--panel);
+    border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #props-body { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+  .prop-row   { display: flex; flex-direction: column; gap: 4px; }
+  .prop-label { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+
+  .prop-row input[type=color] {
+    width: 100%; height: 32px; border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--surface); cursor: pointer; padding: 2px;
+  }
+  .prop-row input[type=range] {
+    width: 100%; accent-color: var(--accent2);
+  }
+  .prop-row input[type=text], .prop-row textarea {
+    width: 100%; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text); padding: 4px 7px; font: inherit; font-size: 12px;
+    outline: none;
+  }
+  .prop-row textarea { resize: vertical; min-height: 56px; font-size: 11px; font-family: monospace; }
+  .prop-row input:focus, .prop-row textarea:focus { border-color: var(--accent2); }
+
+  .prop-hint { font-size: 11px; color: var(--muted); }
+  #no-selection { font-size: 12px; color: var(--muted); padding: 10px; }
+
+  /* ── Scrollbars ──────────────────────────────────────────────────── */
+  ::-webkit-scrollbar         { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track   { background: var(--panel); }
+  ::-webkit-scrollbar-thumb   { background: var(--border); border-radius: 3px; }
+
+  /* ── Modal overlay ───────────────────────────────────────────────── */
+  #toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: var(--surface); color: var(--text); padding: 8px 18px;
+    border-radius: 20px; font-size: 13px; opacity: 0; pointer-events: none;
+    transition: opacity .3s; border: 1px solid var(--accent2); z-index: 999;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<!-- ── Toolbar ──────────────────────────────────────────────────────── -->
+<div id="toolbar">
+  <span class="brand">SVG Editor</span>
+
+  <label class="btn" title="Open SVG file">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M3 7v13h18V7M16 3H8L3 7h18L16 3zM12 12v6M9 15l3-3 3 3"/>
+    </svg>
+    Open SVG
+    <input id="file-input" type="file" accept=".svg,image/svg+xml" hidden />
+  </label>
+
+  <div class="tb-sep"></div>
+
+  <div id="tool-group">
+    <div class="tool-btn active" id="tool-select" title="Select (V)">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 2l16 10-7 1-4 7z"/></svg>
+    </div>
+    <div class="tool-btn" id="tool-pan" title="Pan (H)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M9 4v6H5l7 7 7-7h-4V4H9zM5 17h14"/>
+      </svg>
+    </div>
+  </div>
+
+  <div class="tb-sep"></div>
+
+  <button class="btn" id="btn-zoom-fit" title="Fit to window">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="3" y="3" width="18" height="18" rx="2"/>
+      <path d="M8 8h8v8H8z"/>
+    </svg>
+    Fit
+  </button>
+  <button class="btn" id="btn-zoom-in"  title="Zoom in (+)">＋</button>
+  <button class="btn" id="btn-zoom-out" title="Zoom out (-)">－</button>
+  <span id="zoom-label">100%</span>
+
+  <div class="tb-sep"></div>
+
+  <button class="btn" id="btn-export" title="Download modified SVG">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 3v13M8 12l4 4 4-4M3 17v3h18v-3"/>
+    </svg>
+    Export SVG
+  </button>
+  <button class="btn danger" id="btn-clear" title="Clear canvas">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M3 6h18M19 6l-1 14H6L5 6M10 11v6M14 11v6M9 6V4h6v2"/>
+    </svg>
+    Clear
+  </button>
+</div>
+
+<!-- ── Main layout ──────────────────────────────────────────────────── -->
+<div id="main">
+
+  <!-- Layer panel -->
+  <div id="sidebar">
+    <div class="panel-title">Layers</div>
+    <div id="layer-list"></div>
+  </div>
+
+  <!-- Canvas -->
+  <div id="canvas-wrap">
+    <div id="drop-hint">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="3" y="3" width="18" height="18" rx="2"/>
+        <path d="M3 9h18M9 21V9"/>
+        <circle cx="16" cy="16" r="3"/>
+        <path d="M16 14v4M14 16h4"/>
+      </svg>
+      <p>Drop an SVG here or click <strong>Open SVG</strong></p>
+      <small>Or generate one with <code>convert.py</code> first</small>
+    </div>
+    <div id="svg-container"></div>
+  </div>
+
+  <!-- Properties panel -->
+  <div id="props">
+    <div class="panel-title">Properties</div>
+    <div id="props-body">
+      <div id="no-selection">Click a shape to edit its properties.</div>
+    </div>
+  </div>
+
+</div>
+
+<div id="toast"></div>
+
+<!-- ── Hidden file input for "open" ─────────────────────────────────── -->
+<script>
+'use strict';
+
+// ────────────────────────────────────────────────────────────────────────────
+// State
+// ────────────────────────────────────────────────────────────────────────────
+let svgDoc        = null;   // the live SVG DOM element inside #svg-container
+let layers        = [];     // { el, label, color, visible, paths }
+let selectedEl    = null;   // currently selected SVG element
+let selectedLayer = null;   // layer item index
+let currentTool   = 'select';
+let zoom          = 1;
+let panX = 0, panY = 0;
+let isPanning     = false;
+let panStart      = null;
+let panOrigin     = null;
+let filename      = 'edited.svg';
+
+const INKSCAPE_NS = 'http://www.inkscape.org/namespaces/inkscape';
+
+// ────────────────────────────────────────────────────────────────────────────
+// DOM refs
+// ────────────────────────────────────────────────────────────────────────────
+const canvasWrap   = document.getElementById('canvas-wrap');
+const svgContainer = document.getElementById('svg-container');
+const layerList    = document.getElementById('layer-list');
+const propsBody    = document.getElementById('props-body');
+const dropHint     = document.getElementById('drop-hint');
+const zoomLabel    = document.getElementById('zoom-label');
+const toast        = document.getElementById('toast');
+
+// ────────────────────────────────────────────────────────────────────────────
+// Toast
+// ────────────────────────────────────────────────────────────────────────────
+let toastTimer;
+function showToast(msg, ms = 2200) {
+  toast.textContent = msg;
+  toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), ms);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// File open
+// ────────────────────────────────────────────────────────────────────────────
+document.getElementById('file-input').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (file) loadFile(file);
+  e.target.value = '';
+});
+
+// Drag-and-drop onto canvas
+canvasWrap.addEventListener('dragover', e => {
+  e.preventDefault();
+  canvasWrap.classList.add('drag-over-canvas');
+});
+canvasWrap.addEventListener('dragleave', () => canvasWrap.classList.remove('drag-over-canvas'));
+canvasWrap.addEventListener('drop', e => {
+  e.preventDefault();
+  canvasWrap.classList.remove('drag-over-canvas');
+  const file = e.dataTransfer.files[0];
+  if (file) loadFile(file);
+});
+
+function loadFile(file) {
+  filename = file.name.replace(/\.svg$/i, '') + '-edited.svg';
+  const reader = new FileReader();
+  reader.onload = ev => loadSVGString(ev.target.result);
+  reader.readAsText(file);
+}
+
+function loadSVGString(svgText) {
+  // Remove duplicate XML namespace declarations that some generators emit
+  // e.g. xmlns:inkscape="…" appearing twice → DOMParser rejects it
+  svgText = svgText.replace(/(xmlns:[a-z]+="[^"]*")(\s+\1)+/g, '$1');
+
+  // Parse SVG
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(svgText, 'image/svg+xml');
+  const err = doc.querySelector('parsererror');
+  if (err) { showToast('❌ Failed to parse SVG'); return; }
+
+  const svgEl = doc.documentElement;
+  svgEl.removeAttribute('xmlns:xlink'); // avoid double-parse issues
+
+  // Inject into container
+  svgContainer.innerHTML = '';
+  svgContainer.appendChild(document.adoptNode(svgEl));
+  svgDoc = svgContainer.querySelector('svg');
+  dropHint.style.opacity = '0';
+  dropHint.style.pointerEvents = 'none';
+
+  // Ensure dimensions
+  if (!svgDoc.getAttribute('width') || !svgDoc.getAttribute('height')) {
+    const vb = svgDoc.getAttribute('viewBox');
+    if (vb) {
+      const [,, w, h] = vb.split(/[\s,]+/).map(Number);
+      svgDoc.setAttribute('width',  w);
+      svgDoc.setAttribute('height', h);
+    }
+  }
+
+  attachSVGListeners();
+  scanLayers();
+  fitToWindow();
+  clearSelection();
+  showToast('✔ SVG loaded — ' + layers.length + ' layer(s)');
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Layer scanning
+// ────────────────────────────────────────────────────────────────────────────
+function scanLayers() {
+  layers = [];
+  if (!svgDoc) return;
+
+  const groups = Array.from(svgDoc.querySelectorAll('g'));
+  // Only top-level g elements (direct children of svg)
+  const topGroups = groups.filter(g => g.parentElement === svgDoc);
+
+  topGroups.forEach((g, i) => {
+    const label = g.getAttribute('inkscape:label')
+                || g.getAttribute('id')
+                || `Layer ${i + 1}`;
+    const visible = g.style.display !== 'none'
+                 && g.getAttribute('display') !== 'none';
+
+    // Get dominant colour from first path/rect with a fill
+    let color = '#888888';
+    const colorEl = g.querySelector('[fill]:not([fill="none"])');
+    if (colorEl) {
+      const f = colorEl.getAttribute('fill');
+      if (f && f !== 'none' && f !== 'transparent') color = f;
+    }
+
+    const paths = Array.from(g.querySelectorAll('path, rect, circle, ellipse, polygon, polyline, line, image'));
+
+    layers.push({ el: g, label, color, visible, paths, index: i });
+  });
+
+  renderLayerPanel();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Layer panel rendering
+// ────────────────────────────────────────────────────────────────────────────
+function renderLayerPanel() {
+  layerList.innerHTML = '';
+  layers.forEach((layer, i) => {
+    const item = document.createElement('div');
+    item.className = 'layer-item' + (i === selectedLayer ? ' selected' : '');
+    item.dataset.index = i;
+
+    item.innerHTML = `
+      <div class="layer-swatch" style="background:${layer.color}"></div>
+      <div class="layer-name" title="${layer.label}">${layer.label}</div>
+      <div class="layer-eye" data-index="${i}" title="Toggle visibility">
+        ${layer.visible ? eyeOnSVG() : eyeOffSVG()}
+      </div>`;
+
+    // Select layer on click
+    item.addEventListener('click', e => {
+      if (e.target.closest('.layer-eye')) return;
+      selectLayer(i);
+    });
+
+    // Eye toggle
+    item.querySelector('.layer-eye').addEventListener('click', e => {
+      e.stopPropagation();
+      toggleLayerVisibility(i);
+    });
+
+    layerList.appendChild(item);
+  });
+}
+
+function eyeOnSVG() {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+  </svg>`;
+}
+function eyeOffSVG() {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" opacity=".4">
+    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+    <line x1="1" y1="1" x2="23" y2="23"/>
+  </svg>`;
+}
+
+function selectLayer(i) {
+  selectedLayer = i;
+  clearSelection();
+  renderLayerPanel();
+}
+
+function toggleLayerVisibility(i) {
+  const layer = layers[i];
+  layer.visible = !layer.visible;
+  layer.el.style.display = layer.visible ? '' : 'none';
+  renderLayerPanel();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// SVG element listeners for selection
+// ────────────────────────────────────────────────────────────────────────────
+function attachSVGListeners() {
+  if (!svgDoc) return;
+  const clickables = svgDoc.querySelectorAll('path, rect, circle, ellipse, polygon, polyline, image, use');
+  clickables.forEach(el => {
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', e => {
+      if (currentTool !== 'select') return;
+      e.stopPropagation();
+      selectElement(el);
+    });
+  });
+  // Click on background → deselect
+  svgDoc.addEventListener('click', () => {
+    if (currentTool === 'select') clearSelection();
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Selection
+// ────────────────────────────────────────────────────────────────────────────
+function selectElement(el) {
+  clearSelection();
+  selectedEl = el;
+  el.dataset._origStroke      = el.getAttribute('stroke')       || '';
+  el.dataset._origStrokeWidth = el.getAttribute('stroke-width') || '';
+  el.setAttribute('stroke', '#53c0f0');
+  el.setAttribute('stroke-width', Math.max(1, 2 / zoom));
+  renderPropsPanel(el);
+}
+
+function clearSelection() {
+  if (selectedEl) {
+    const os = selectedEl.dataset._origStroke;
+    const osw = selectedEl.dataset._origStrokeWidth;
+    if (os) selectedEl.setAttribute('stroke', os);
+    else selectedEl.removeAttribute('stroke');
+    if (osw) selectedEl.setAttribute('stroke-width', osw);
+    else selectedEl.removeAttribute('stroke-width');
+    selectedEl = null;
+  }
+  renderPropsPanel(null);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Properties panel
+// ────────────────────────────────────────────────────────────────────────────
+function renderPropsPanel(el) {
+  propsBody.innerHTML = '';
+
+  if (!el) {
+    const hint = document.createElement('div');
+    hint.id = 'no-selection';
+    hint.textContent = 'Click a shape to edit its properties.';
+    propsBody.appendChild(hint);
+    return;
+  }
+
+  // ── Fill colour ──────────────────────────────────────────────────────────
+  const fillRow = makePropRow('Fill colour');
+  const currentFill = getComputedFill(el);
+  const fillColor = document.createElement('input');
+  fillColor.type = 'color';
+  fillColor.value = toHex(currentFill) || '#000000';
+  fillColor.addEventListener('input', () => {
+    el.setAttribute('fill', fillColor.value);
+    // Also update layer swatch if this element is the layer's dominant one
+    refreshLayerSwatches();
+  });
+  fillRow.appendChild(fillColor);
+
+  // ── Fill opacity ─────────────────────────────────────────────────────────
+  const opacRow = makePropRow('Fill opacity');
+  const opacVal = document.createElement('div');
+  opacVal.className = 'prop-hint';
+  const opac = parseFloat(el.getAttribute('fill-opacity') ?? el.getAttribute('opacity') ?? '1');
+  opacVal.textContent = Math.round(opac * 100) + '%';
+  const opacRange = document.createElement('input');
+  opacRange.type = 'range'; opacRange.min = 0; opacRange.max = 1; opacRange.step = 0.01;
+  opacRange.value = opac;
+  opacRange.addEventListener('input', () => {
+    el.setAttribute('fill-opacity', opacRange.value);
+    opacVal.textContent = Math.round(opacRange.value * 100) + '%';
+  });
+  opacRow.appendChild(opacRange);
+  opacRow.appendChild(opacVal);
+
+  // ── Stroke ───────────────────────────────────────────────────────────────
+  const strokeRow = makePropRow('Stroke colour');
+  const strokeColor = document.createElement('input');
+  strokeColor.type = 'color';
+  const curStroke = el.getAttribute('stroke');
+  strokeColor.value = toHex(curStroke) || '#000000';
+  strokeColor.addEventListener('input', () => {
+    el.setAttribute('stroke', strokeColor.value);
+    el.dataset._origStroke = strokeColor.value; // update so clearSelection restores it
+  });
+  strokeRow.appendChild(strokeColor);
+
+  // ── Stroke width ─────────────────────────────────────────────────────────
+  const swRow = makePropRow('Stroke width');
+  const sw = document.createElement('input');
+  sw.type = 'text';
+  sw.value = el.getAttribute('stroke-width') || '0';
+  sw.addEventListener('change', () => el.setAttribute('stroke-width', sw.value));
+  swRow.appendChild(sw);
+
+  // ── Element tag ──────────────────────────────────────────────────────────
+  const tagRow = makePropRow('Element');
+  const tagHint = document.createElement('div');
+  tagHint.className = 'prop-hint';
+  tagHint.textContent = `<${el.tagName.toLowerCase()}>`;
+  tagRow.appendChild(tagHint);
+
+  // ── Layer ────────────────────────────────────────────────────────────────
+  const layerParent = el.closest('g[inkscape\\:label], g[id]');
+  if (layerParent) {
+    const lRow = makePropRow('In layer');
+    const lHint = document.createElement('div');
+    lHint.className = 'prop-hint';
+    lHint.textContent = layerParent.getAttribute('inkscape:label')
+                      || layerParent.getAttribute('id') || '—';
+    lRow.appendChild(lHint);
+    propsBody.appendChild(lRow);
+  }
+
+  propsBody.appendChild(fillRow);
+  propsBody.appendChild(opacRow);
+  propsBody.appendChild(strokeRow);
+  propsBody.appendChild(swRow);
+  propsBody.appendChild(tagRow);
+}
+
+function makePropRow(label) {
+  const row = document.createElement('div');
+  row.className = 'prop-row';
+  const lbl = document.createElement('div');
+  lbl.className = 'prop-label';
+  lbl.textContent = label;
+  row.appendChild(lbl);
+  return row;
+}
+
+function getComputedFill(el) {
+  return el.getAttribute('fill')
+      || el.style.fill
+      || '#000000';
+}
+
+function toHex(color) {
+  if (!color || color === 'none') return null;
+  if (/^#[0-9a-f]{3,8}$/i.test(color)) {
+    if (color.length === 4) {
+      return '#' + color[1]+color[1]+color[2]+color[2]+color[3]+color[3];
+    }
+    return color.slice(0,7);
+  }
+  const m = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+  if (m) return '#' + [m[1],m[2],m[3]].map(v => parseInt(v).toString(16).padStart(2,'0')).join('');
+  return null;
+}
+
+function refreshLayerSwatches() {
+  layers.forEach((layer, i) => {
+    const colorEl = layer.el.querySelector('[fill]:not([fill="none"])');
+    if (colorEl) {
+      const f = colorEl.getAttribute('fill');
+      if (f && f !== 'none') layer.color = f;
+    }
+  });
+  renderLayerPanel();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Zoom & Pan
+// ────────────────────────────────────────────────────────────────────────────
+function applyTransform() {
+  svgContainer.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+  zoomLabel.textContent = Math.round(zoom * 100) + '%';
+}
+
+function setZoom(z, cx, cy) {
+  const ww = canvasWrap.clientWidth;
+  const wh = canvasWrap.clientHeight;
+  cx = cx ?? ww / 2;
+  cy = cy ?? wh / 2;
+
+  const oldZoom = zoom;
+  zoom = Math.max(0.05, Math.min(20, z));
+
+  // Zoom towards cursor
+  panX = cx - (cx - panX) * (zoom / oldZoom);
+  panY = cy - (cy - panY) * (zoom / oldZoom);
+  applyTransform();
+}
+
+function fitToWindow() {
+  if (!svgDoc) return;
+  const cw = canvasWrap.clientWidth  - 40;
+  const ch = canvasWrap.clientHeight - 40;
+  const sw = parseFloat(svgDoc.getAttribute('width'))
+          || parseFloat(svgDoc.viewBox.baseVal.width) || 800;
+  const sh = parseFloat(svgDoc.getAttribute('height'))
+          || parseFloat(svgDoc.viewBox.baseVal.height) || 600;
+  const z = Math.min(cw / sw, ch / sh);
+  zoom = z;
+  panX = (canvasWrap.clientWidth  - sw * z) / 2;
+  panY = (canvasWrap.clientHeight - sh * z) / 2;
+  applyTransform();
+}
+
+document.getElementById('btn-zoom-fit').addEventListener('click', fitToWindow);
+document.getElementById('btn-zoom-in').addEventListener('click',  () => setZoom(zoom * 1.25));
+document.getElementById('btn-zoom-out').addEventListener('click', () => setZoom(zoom / 1.25));
+
+// Mouse wheel zoom
+canvasWrap.addEventListener('wheel', e => {
+  e.preventDefault();
+  const rect = canvasWrap.getBoundingClientRect();
+  const cx = e.clientX - rect.left;
+  const cy = e.clientY - rect.top;
+  const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+  setZoom(zoom * factor, cx, cy);
+}, { passive: false });
+
+// Pan with middle-button drag or when pan tool is active
+canvasWrap.addEventListener('mousedown', e => {
+  const isPanTool = currentTool === 'pan';
+  if (e.button === 1 || isPanTool) {
+    e.preventDefault();
+    isPanning = true;
+    panStart  = { x: e.clientX, y: e.clientY };
+    panOrigin = { x: panX, y: panY };
+    canvasWrap.style.cursor = 'grabbing';
+  }
+});
+window.addEventListener('mousemove', e => {
+  if (!isPanning) return;
+  panX = panOrigin.x + (e.clientX - panStart.x);
+  panY = panOrigin.y + (e.clientY - panStart.y);
+  applyTransform();
+});
+window.addEventListener('mouseup', e => {
+  if (isPanning) {
+    isPanning = false;
+    canvasWrap.style.cursor = currentTool === 'pan' ? 'grab' : 'default';
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Tool buttons
+// ────────────────────────────────────────────────────────────────────────────
+document.getElementById('tool-select').addEventListener('click', () => setTool('select'));
+document.getElementById('tool-pan').addEventListener('click',    () => setTool('pan'));
+
+function setTool(t) {
+  currentTool = t;
+  document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tool-' + t).classList.add('active');
+  canvasWrap.style.cursor = t === 'pan' ? 'grab' : 'default';
+  if (t !== 'select') clearSelection();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Keyboard shortcuts
+// ────────────────────────────────────────────────────────────────────────────
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'v' || e.key === 'V') setTool('select');
+  if (e.key === 'h' || e.key === 'H') setTool('pan');
+  if (e.key === '+' || e.key === '=') setZoom(zoom * 1.25);
+  if (e.key === '-')                   setZoom(zoom / 1.25);
+  if (e.key === '0')                   fitToWindow();
+  if (e.key === 'Escape')              clearSelection();
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Export
+// ────────────────────────────────────────────────────────────────────────────
+document.getElementById('btn-export').addEventListener('click', () => {
+  if (!svgDoc) { showToast('No SVG loaded.'); return; }
+
+  // Temporarily remove selection stroke before serialising
+  const hadSel = selectedEl;
+  if (hadSel) clearSelection();
+
+  const xmlDecl = '<?xml version="1.0" encoding="UTF-8"?>\n';
+  const serial  = new XMLSerializer().serializeToString(svgDoc);
+  const blob    = new Blob([xmlDecl + serial], { type: 'image/svg+xml' });
+  const a       = document.createElement('a');
+  a.href        = URL.createObjectURL(blob);
+  a.download    = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+
+  showToast('✔ Exported ' + filename);
+  if (hadSel) selectElement(hadSel);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Clear
+// ────────────────────────────────────────────────────────────────────────────
+document.getElementById('btn-clear').addEventListener('click', () => {
+  svgContainer.innerHTML = '';
+  svgDoc = null; layers = []; selectedEl = null; selectedLayer = null;
+  layerList.innerHTML = '';
+  dropHint.style.opacity = '1';
+  dropHint.style.pointerEvents = '';
+  renderPropsPanel(null);
+  showToast('Canvas cleared');
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Init
+// ────────────────────────────────────────────────────────────────────────────
+applyTransform();
+</script>
+</body>
+</html>
