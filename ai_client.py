@@ -3,19 +3,62 @@ import json, re, textwrap
 from typing import Any
 import httpx
 from models import OPENROUTER_API_KEY, TEXT_MODEL, IMAGE_MODEL, GenerateRequest
-from scene_engine import catalog, compact_json, normalize_scene
+from scene_engine import catalog, compact_json, normalize_scene, layout_planner_context
+from planning_agent import build_asset_registry_context, resolve_prompt_assets, validate_layout_plan
 import base64
 
 SCENE_SYSTEM_PROMPT = textwrap.dedent("""
     You are a scene planner for automotive ODD pictograms.
     Produce JSON only. No markdown. No prose outside the JSON object.
-    The output schema is:
+        Prefer symbolic placement over raw coordinates.
+        The output schema is:
     {
       "version": "odd.scene.v1",
       "canvas": {"width": 1024, "height": 768, "background": "#f8fafc"},
       "title": "short title",
       "prompt": "user prompt",
       "warnings": ["optional warning"],
+            "layoutPlan": {
+                "layout": {"template": "straight_road|crosswalk_road|intersection|t_junction|roundabout|highway_3_lane"},
+                "static": [
+                    {
+                        "id": "string",
+                        "kind": "traffic_light|tree|placeholder|...",
+                        "label": "human readable label",
+                        "anchor": "template anchor name",
+                        "scale": 1,
+                        "rotation": 0,
+                        "color": "#rrggbb",
+                        "props": {}
+                    }
+                ],
+                "dynamic": [
+                    {
+                        "id": "string",
+                        "kind": "car|truck|bus|pedestrian|bicycle|placeholder",
+                        "label": "human readable label",
+                        "lane": "template lane name",
+                        "laneIndex": 1,
+                        "slot": 1,
+                        "slotCount": 5,
+                        "s": 0.0,
+                        "heading": "forward|reverse",
+                        "relation": "behind:other_id|ahead_of:other_id|approaching:other_id|next_to:other_id",
+                        "scale": 1,
+                        "color": "#rrggbb",
+                        "props": {}
+                    }
+                ],
+                "annotations": [
+                    {
+                        "id": "string",
+                        "kind": "arrow|placeholder",
+                        "anchor": "template anchor name",
+                        "rotation": 0,
+                        "props": {}
+                    }
+                ]
+            },
       "elements": [
         {
           "id": "string",
@@ -29,13 +72,21 @@ SCENE_SYSTEM_PROMPT = textwrap.dedent("""
     }
     Rules:
     - Use only the allowed kinds.
+    - Always provide `layoutPlan` unless the prompt truly cannot be expressed with the available templates.
+    - Behave like an asset-aware planning agent: first use the asset registry and resolved prompt entities, then compose the scene plan.
     - Prefer top-down, simple, flat pictogram scenes.
     - Keep the scene concise and editable.
     - If an asset is missing, emit kind="placeholder" with a short label.
-    - Roads should be represented with road, intersection, t_junction, roundabout, or crosswalk assets.
+    - Roads should be represented through `layoutPlan.layout.template`; only use raw road elements as fallback.
     - Use arrow props.style values such as straight, left, right, merge, uturn.
-    - Keep coordinates inside a 1024x768 canvas.
+    - In `layoutPlan.dynamic`, use `lane` plus progress `s` from 0.0 to 1.0 instead of `x` and `y`.
+    - Prefer `laneIndex` + `slot` for vehicles when a laneed road/highway template is used.
+    - `slot` means ordinal position along the lane, not pixel coordinates.
+    - In `layoutPlan.static`, bind assets to named anchors instead of inventing coordinates.
+    - If you include `elements`, keep them minimal and consistent with `layoutPlan`.
     - Respect each asset's default footprint, orientation, and placement guidance.
+    - Respect each asset's catalog group, layer group, and allowed placements.
+    - Use layer bands consistently: layout near 0-1, environment near 4-5, traffic near 10-11, actors near 12-13, props near 16, annotations near 20+.
     - Vehicles should be centered on lanes, not stacked side-by-side without road alignment.
     - Trucks and buses should occupy more space than cars; pedestrians belong beside roads or on crossings.
     - Use rotation to align vehicles with road direction: 0/180 for horizontal travel, 90/-90 for vertical travel.
@@ -78,11 +129,15 @@ async def call_text_scene_planner(req: GenerateRequest) -> dict[str, Any]:
     if not OPENROUTER_API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY is not configured")
 
+    asset_resolution = resolve_prompt_assets(req.prompt)
     user_payload = {
         "prompt": req.prompt,
         "current_scene": req.current_scene,
         "recent_history": req.history[-6:],
         "allowed_assets": [item["kind"] for item in catalog()],
+        "asset_resolution": asset_resolution,
+        "asset_registry": build_asset_registry_context(),
+        "layout_templates": layout_planner_context(),
         "asset_specs": [
             {
                 "kind": item.get("kind"),
@@ -91,7 +146,15 @@ async def call_text_scene_planner(req: GenerateRequest) -> dict[str, Any]:
                 "defaultScale": item.get("defaultScale"),
                 "defaultRotation": item.get("defaultRotation"),
                 "placement": item.get("placement"),
+                "allowedPlacements": item.get("allowedPlacements"),
                 "orientation": item.get("orientation"),
+                "catalogGroup": item.get("catalogGroup"),
+                "view": item.get("view"),
+                "role": item.get("role"),
+                "layerGroup": item.get("layerGroup"),
+                "assetClass": item.get("assetClass"),
+                "mobility": item.get("mobility"),
+                "layer": item.get("layer"),
             }
             for item in catalog()
         ],
@@ -119,8 +182,16 @@ async def call_text_scene_planner(req: GenerateRequest) -> dict[str, Any]:
     data = response.json()
     content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
     planned = extract_json_object(content)
+    validated_layout_plan = validate_layout_plan(planned.get("layoutPlan"))
+    if validated_layout_plan:
+        planned["layoutPlan"] = validated_layout_plan
     planned.setdefault("prompt", req.prompt)
-    return normalize_scene(planned)
+    return {
+        "scene": normalize_scene(planned),
+        "raw_text": content,
+        "raw_json": planned,
+        "asset_resolution": asset_resolution,
+    }
 
 
 async def generate_image_data(prompt: str, history: list[dict[str, Any]] | None = None) -> str:

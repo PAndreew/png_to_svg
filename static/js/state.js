@@ -18,6 +18,7 @@ export const state = {
   isGenerating: false,
   svgFilename: 'pictogram.svg',
   importColors: 8,
+  plannerTrace: null,
 };
 
 export const dom = {
@@ -31,6 +32,7 @@ export const dom = {
   zoomLabel: document.getElementById('zoom-label'),
   propsBody: document.getElementById('props-body'),
   assetGrid: document.getElementById('asset-grid'),
+  plannerTrace: document.getElementById('planner-trace'),
   sceneSummary: document.getElementById('scene-summary'),
   toast: document.getElementById('toast'),
   toolSelect: document.getElementById('tool-select'),

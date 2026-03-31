@@ -40,7 +40,7 @@ def get_assets() -> JSONResponse:
 @app.post("/api/assets")
 async def save_asset(req: SaveAssetRequest) -> JSONResponse:
     try:
-        asset = save_svg_asset(req.name, req.svg, overwrite=req.overwrite)
+        asset = save_svg_asset(req.name, req.svg, overwrite=req.overwrite, orientation=req.orientation)
         return JSONResponse({"asset": asset, "assets": catalog()})
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

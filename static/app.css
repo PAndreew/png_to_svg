@@ -326,6 +326,24 @@
     }
     #scene-summary { display: flex; flex-direction: column; gap: 8px; }
     #asset-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .asset-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .asset-group-title {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.85px;
+      color: var(--muted);
+      font-weight: 800;
+      padding: 0 2px;
+    }
+    .asset-group-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 10px;
@@ -350,6 +368,13 @@
     }
     .asset-head { display: flex; align-items: center; gap: 8px; }
     .asset-name { font-weight: 800; color: #2f3744; }
+    .asset-meta {
+      color: #9aa3b4;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      font-weight: 700;
+    }
     .asset-desc { color: var(--muted); font-size: 11px; }
     .swatch {
       width: 12px;
@@ -378,6 +403,51 @@
     .field input[type="color"] { min-height: 40px; padding: 4px; }
     .field input[type="range"] { padding: 0; accent-color: var(--accent); }
     .button-stack { display: flex; gap: 8px; }
+    #planner-trace {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 0;
+    }
+    .trace-row {
+      font-size: 12px;
+      color: #364050;
+    }
+    .trace-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.75px;
+      color: var(--muted);
+      font-weight: 800;
+      margin-top: 4px;
+    }
+    .trace-pre {
+      margin: 0;
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid #e4eaf4;
+      background: #fbfcff;
+      color: #2a3341;
+      font: 11px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 240px;
+      overflow: auto;
+    }
+    .trace-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .trace-item {
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: #fff8f5;
+      border: 1px solid #ffd8ca;
+      color: #6d3c27;
+      font-size: 11px;
+      line-height: 1.4;
+    }
     #toast {
       position: fixed;
       left: 50%;
