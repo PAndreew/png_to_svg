@@ -35,6 +35,10 @@ SCENE_SYSTEM_PROMPT = textwrap.dedent("""
     - Roads should be represented with road, intersection, t_junction, roundabout, or crosswalk assets.
     - Use arrow props.style values such as straight, left, right, merge, uturn.
     - Keep coordinates inside a 1024x768 canvas.
+    - Respect each asset's default footprint, orientation, and placement guidance.
+    - Vehicles should be centered on lanes, not stacked side-by-side without road alignment.
+    - Trucks and buses should occupy more space than cars; pedestrians belong beside roads or on crossings.
+    - Use rotation to align vehicles with road direction: 0/180 for horizontal travel, 90/-90 for vertical travel.
 """).strip()
 
 IMAGE_SYSTEM_PROMPT = textwrap.dedent("""
@@ -79,6 +83,18 @@ async def call_text_scene_planner(req: GenerateRequest) -> dict[str, Any]:
         "current_scene": req.current_scene,
         "recent_history": req.history[-6:],
         "allowed_assets": [item["kind"] for item in catalog()],
+        "asset_specs": [
+            {
+                "kind": item.get("kind"),
+                "label": item.get("label"),
+                "footprint": item.get("footprint"),
+                "defaultScale": item.get("defaultScale"),
+                "defaultRotation": item.get("defaultRotation"),
+                "placement": item.get("placement"),
+                "orientation": item.get("orientation"),
+            }
+            for item in catalog()
+        ],
     }
 
     payload = {

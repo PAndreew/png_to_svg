@@ -20,6 +20,7 @@ export function showToast(message, ms = 2400) {
 
 // The assetMarkup function - pure SVG shape factory
 export function assetMarkup(kind, meta = {}) {
+  if (meta.svgMarkup) return meta.svgMarkup;
   const color = meta.color || '#2563eb';
   const props = meta.props || {};
   const text = escapeHtml(props.text || meta.label || 'Missing asset');

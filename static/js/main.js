@@ -1,8 +1,8 @@
 import { state, dom } from './state.js';
 import { applyViewport, setZoom, fitToWindow, scenePointFromClient, clearSelection, selectElement, deleteSelected, insertAsset } from './editor.js';
 import { sendPrompt } from './chat.js';
-import { setTool, exportSvg, clearCanvas } from './toolbar.js';
-import { loadAssets } from './assets-panel.js';
+import { setTool, exportSvg, clearCanvas, handleSvgInputChange, handleImageInputChange, importFile } from './toolbar.js';
+import { loadAssets, saveCurrentSvgAsAsset } from './assets-panel.js';
 import { appendMessage } from './chat.js';
 
 // Wire up toolbar button events
@@ -12,8 +12,19 @@ dom.toolDelete.onclick = deleteSelected;
 document.getElementById('btn-fit').onclick = fitToWindow;
 document.getElementById('btn-zoom-in').onclick = () => setZoom(state.zoom * 1.2);
 document.getElementById('btn-zoom-out').onclick = () => setZoom(state.zoom / 1.2);
+dom.btnOpenSvg.onclick = () => dom.svgInput.click();
+dom.btnImportImage.onclick = () => dom.imageInput.click();
+dom.btnSaveAsset.onclick = async () => {
+  try {
+    await saveCurrentSvgAsAsset();
+  } catch (error) {
+    appendMessage('assistant', `Error: ${error.message}`);
+  }
+};
 document.getElementById('btn-export').onclick = exportSvg;
 document.getElementById('btn-clear').onclick = clearCanvas;
+dom.svgInput.addEventListener('change', handleSvgInputChange);
+dom.imageInput.addEventListener('change', handleImageInputChange);
 dom.sendBtn.onclick = sendPrompt;
 
 dom.promptInput.addEventListener('keydown', (event) => {
@@ -71,8 +82,17 @@ dom.canvasPane.addEventListener('dragover', (event) => {
   event.preventDefault();
   event.dataTransfer.dropEffect = 'copy';
 });
-dom.canvasPane.addEventListener('drop', (event) => {
+dom.canvasPane.addEventListener('drop', async (event) => {
   event.preventDefault();
+  const [file] = event.dataTransfer.files || [];
+  if (file) {
+    try {
+      await importFile(file);
+    } catch (error) {
+      appendMessage('assistant', `Error: ${error.message}`);
+    }
+    return;
+  }
   const kind = event.dataTransfer.getData('text/plain');
   if (!kind) return;
   insertAsset(kind, scenePointFromClient(event.clientX, event.clientY));
@@ -80,5 +100,5 @@ dom.canvasPane.addEventListener('drop', (event) => {
 
 // Init
 applyViewport();
-appendMessage('assistant', 'Describe an automotive traffic scenario. Structured scene generation is used first, with fallback when needed. Then refine with follow-up prompts or drag assets onto the canvas.');
+appendMessage('assistant', 'Describe a scene, import an SVG, or convert a PNG/JPG into editable vectors.');
 loadAssets();

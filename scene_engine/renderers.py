@@ -1,8 +1,16 @@
 from __future__ import annotations
 from typing import Any
 from .normalize import normalize_scene, build_transform, xml_escape, ensure_color, clamp_number, default_label
+from .catalog import catalog
 
 SVG_NS = "http://www.w3.org/2000/svg"
+
+
+def _asset_definition(kind: str) -> dict[str, Any] | None:
+    for item in catalog():
+        if item.get("kind") == kind:
+            return item
+    return None
 
 
 def render_scene_svg(scene: dict[str, Any]) -> str:
@@ -26,24 +34,28 @@ def render_scene_svg(scene: dict[str, Any]) -> str:
 
 
 def render_element(element: dict[str, Any]) -> str:
-    renderer = {
-        "road": render_road,
-        "intersection": render_intersection,
-        "t_junction": render_t_junction,
-        "roundabout": render_roundabout,
-        "crosswalk": render_crosswalk,
-        "car": render_car,
-        "truck": render_truck,
-        "bus": render_bus,
-        "pedestrian": render_pedestrian,
-        "bicycle": render_bicycle,
-        "traffic_light": render_traffic_light,
-        "tree": render_tree,
-        "arrow": render_arrow,
-        "placeholder": render_placeholder,
-    }.get(element["kind"], render_placeholder)
+    asset_definition = _asset_definition(element["kind"])
+    if asset_definition and asset_definition.get("svgMarkup"):
+        inner = str(asset_definition["svgMarkup"])
+    else:
+        renderer = {
+            "road": render_road,
+            "intersection": render_intersection,
+            "t_junction": render_t_junction,
+            "roundabout": render_roundabout,
+            "crosswalk": render_crosswalk,
+            "car": render_car,
+            "truck": render_truck,
+            "bus": render_bus,
+            "pedestrian": render_pedestrian,
+            "bicycle": render_bicycle,
+            "traffic_light": render_traffic_light,
+            "tree": render_tree,
+            "arrow": render_arrow,
+            "placeholder": render_placeholder,
+        }.get(element["kind"], render_placeholder)
 
-    inner = renderer(element)
+        inner = renderer(element)
     attrs = {
         "class": "scene-asset",
         "data-scene-id": element["id"],

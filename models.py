@@ -15,7 +15,15 @@ class ChatRequest(BaseModel):
 
 class ToSvgRequest(BaseModel):
     image: str
-    colors: int = 10
+    colors: int = 8
+    transparent_background: bool = False
+    alpha_threshold: int = 8
+
+
+class SaveAssetRequest(BaseModel):
+    name: str
+    svg: str
+    overwrite: bool = False
 
 
 class GenerateRequest(BaseModel):

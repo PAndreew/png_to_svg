@@ -17,6 +17,7 @@ export const state = {
   history: [],
   isGenerating: false,
   svgFilename: 'pictogram.svg',
+  importColors: 8,
 };
 
 export const dom = {
@@ -35,4 +36,9 @@ export const dom = {
   toolSelect: document.getElementById('tool-select'),
   toolPan: document.getElementById('tool-pan'),
   toolDelete: document.getElementById('tool-delete'),
+  btnOpenSvg: document.getElementById('btn-open-svg'),
+  btnImportImage: document.getElementById('btn-import-image'),
+  btnSaveAsset: document.getElementById('btn-save-asset'),
+  svgInput: document.getElementById('svg-input'),
+  imageInput: document.getElementById('image-input'),
 };

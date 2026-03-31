@@ -3,23 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Pictogram Studio</title>
+  <title>PictoStudio</title>
   <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
   <div id="topbar">
     <div class="topbar-left">
-      <button class="menu-btn" aria-hidden="true">☰</button>
-      <div class="brand-lockup">
-        <span class="brand-mark">F</span>
-        <span class="brand">FALCON</span>
-      </div>
-    </div>
-
-    <div class="topbar-center">
-      <span class="project-label">Project:</span>
-      <span class="project-code">ADT400AA</span>
-      <span class="project-caret">▼</span>
+      <span class="brand">PictoStudio</span>
     </div>
 
     <div class="topbar-right">
@@ -37,6 +27,8 @@
       </div>
       <div class="sep"></div>
       <div class="btn-row">
+        <button class="btn" id="btn-open-svg">Open SVG</button>
+        <button class="btn" id="btn-import-image">Image → SVG</button>
         <button class="btn" id="btn-export">Export SVG</button>
         <button class="btn danger" id="btn-clear">Clear</button>
       </div>
@@ -45,45 +37,15 @@
 
   <div id="layout">
     <section id="chat-pane" class="panel">
-      <div class="sidebar-nav">
-        <div class="nav-item active"><span class="icon">◉</span><span>Explore</span></div>
-        <div class="nav-item"><span class="icon">☆</span><span>Starred (0)</span></div>
-        <div class="nav-item"><span class="icon">⌘</span><span>Collections</span></div>
-        <div class="nav-item"><span class="icon">⌖</span><span>Sensor search</span></div>
-        <div class="nav-item"><span class="icon">◫</span><span>Datasets</span></div>
-        <div class="nav-item"><span class="icon">⌗</span><span>Tags</span></div>
-        <div class="nav-item"><span class="icon">⋮</span><span>Pipelines</span></div>
-      </div>
-
-      <div class="pane-title">Prompt Console</div>
+      <div class="pane-title">Chat</div>
       <div id="messages"></div>
       <div id="chat-input-row">
-        <textarea id="prompt-input" rows="1" placeholder="Describe a traffic scene or refine the current one..."></textarea>
+        <textarea id="prompt-input" rows="1" placeholder="Describe a scene or refine the current SVG..."></textarea>
         <button id="send-btn">Generate</button>
-      </div>
-      <div class="sidebar-footer">
-        Falcon-inspired restyle<br>
-        © 2026, Pictogram Studio
       </div>
     </section>
 
     <section id="canvas-pane">
-      <div class="canvas-chrome" aria-hidden="true">
-        <div class="explore-header">
-          <div class="explore-title">Explore</div>
-          <div class="search-shell">
-            <span class="search-icon"></span>
-            <span>Search</span>
-          </div>
-        </div>
-        <div class="tab-row">
-          <div class="tab-pill"><span class="tab-icon">◔</span><span>Sessions</span></div>
-          <div class="tab-pill active"><span class="tab-icon">⬒</span><span>Recordings</span></div>
-          <div class="tab-pill"><span class="tab-icon">◫</span><span>Data Objects</span></div>
-        </div>
-        <div class="project-strip"><span class="accent">project:</span> ADT400AA</div>
-      </div>
-
       <div id="drop-hint">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <rect x="3" y="3" width="18" height="18" rx="2"></rect>
@@ -91,8 +53,8 @@
           <circle cx="16" cy="16" r="3"></circle>
           <path d="M16 14v4M14 16h4"></path>
         </svg>
-        <strong>Generate a structured ODD pictogram</strong>
-        <small>Use the chat, then refine with follow-up prompts or drag assets from the catalogue.</small>
+        <strong>Generate or import an SVG</strong>
+        <small>Use chat, open an SVG, or convert a PNG/JPG into editable vectors.</small>
       </div>
       <div id="svg-container"></div>
       <svg id="sel-overlay"></svg>
@@ -109,6 +71,7 @@
         <div class="card">
           <div class="card-title">Asset Catalogue</div>
           <div class="hint">Drag onto the canvas or click to insert at the center.</div>
+          <button class="btn" id="btn-save-asset">Add current SVG as asset</button>
           <div id="asset-grid"></div>
         </div>
 
@@ -121,6 +84,8 @@
   </div>
 
   <div id="toast"></div>
+  <input id="svg-input" type="file" accept=".svg,image/svg+xml" hidden />
+  <input id="image-input" type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" hidden />
 
   <script type="module" src="/static/js/main.js"></script>
 </body>

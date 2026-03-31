@@ -327,30 +327,47 @@ export function rebuildSceneMeta(scene) {
 }
 
 export function loadSVGString(svgText, payload = {}) {
+  svgText = svgText.replace(/(xmlns:[a-z]+="[^"]*")(\s+\1)+/g, '$1');
   const parser = new DOMParser();
   const doc = parser.parseFromString(svgText, 'image/svg+xml');
   if (doc.querySelector('parsererror')) {
     showToast('SVG parse error');
     return;
   }
+  doc.documentElement.removeAttribute('xmlns:xlink');
   dom.svgContainer.innerHTML = '';
   dom.svgContainer.appendChild(document.adoptNode(doc.documentElement));
   state.svgDoc = dom.svgContainer.querySelector('svg');
   if (!state.svgDoc.getAttribute('width') || !state.svgDoc.getAttribute('height')) {
-    state.svgDoc.setAttribute('width', DEFAULT_CANVAS.width);
-    state.svgDoc.setAttribute('height', DEFAULT_CANVAS.height);
-    state.svgDoc.setAttribute('viewBox', `0 0 ${DEFAULT_CANVAS.width} ${DEFAULT_CANVAS.height}`);
+    const viewBox = (state.svgDoc.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number);
+    if (viewBox.length === 4 && Number.isFinite(viewBox[2]) && Number.isFinite(viewBox[3])) {
+      state.svgDoc.setAttribute('width', viewBox[2]);
+      state.svgDoc.setAttribute('height', viewBox[3]);
+    } else {
+      state.svgDoc.setAttribute('width', DEFAULT_CANVAS.width);
+      state.svgDoc.setAttribute('height', DEFAULT_CANVAS.height);
+      state.svgDoc.setAttribute('viewBox', `0 0 ${DEFAULT_CANVAS.width} ${DEFAULT_CANVAS.height}`);
+    }
   }
   if (payload.scene) {
     state.currentScene = payload.scene;
     rebuildSceneMeta(payload.scene);
+  } else {
+    state.currentScene = null;
+    state.sceneMeta = new Map();
   }
   attachSVGListeners();
   dom.dropHint.style.opacity = '0';
   dom.dropHint.style.pointerEvents = 'none';
   clearSelection();
   fitToWindow();
-  updateSceneSummary(payload);
+  updateSceneSummary({
+    ...payload,
+    scene: payload.scene || null,
+    summary: payload.summary || (payload.scene ? 'Scene ready.' : 'SVG loaded on canvas.'),
+    planner: payload.planner || (payload.scene ? 'manual' : 'import'),
+    warnings: payload.warnings || [],
+  });
 }
 
 export function ensureCanvasScene() {
@@ -593,6 +610,7 @@ export function insertAsset(kind, point) {
     kind,
     label: asset.label,
     color: asset.defaultColor || '#2563eb',
+    svgMarkup: asset.svgMarkup || '',
     x: point.x,
     y: point.y,
     rotation: 0,

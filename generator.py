@@ -4,6 +4,7 @@ from models import GenerateRequest
 from ai_client import call_text_scene_planner
 from vectorizer import vectorize_data_uri
 from scene_engine import generate_scene_heuristic, normalize_scene, render_scene_svg, summarize_scene
+from scene_engine.heuristic import apply_spatial_layout
 
 
 async def generate_structured_response(req: GenerateRequest) -> dict[str, Any]:
@@ -28,6 +29,8 @@ async def generate_structured_response(req: GenerateRequest) -> dict[str, Any]:
         warnings.extend(heuristic_warnings)
         used = "heuristic"
 
+    scene = normalize_scene(scene)
+    apply_spatial_layout(scene, req.prompt)
     scene = normalize_scene(scene)
     scene["prompt"] = req.prompt
     scene["warnings"] = list(dict.fromkeys([*scene.get("warnings", []), *warnings]))

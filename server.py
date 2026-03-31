@@ -1,4 +1,5 @@
 """Pictogram Studio — FastAPI server."""
+
 from __future__ import annotations
 import sys
 from pathlib import Path
@@ -12,14 +13,17 @@ HERE = Path(__file__).parent
 load_dotenv(HERE / ".env")
 sys.path.insert(0, str(HERE))
 
-from models import ChatRequest, ToSvgRequest, GenerateRequest
+from models import ChatRequest, ToSvgRequest, GenerateRequest, SaveAssetRequest
 from generator import generate_structured_response
 from vectorizer import vectorize_data_uri
 from ai_client import generate_image_data
 from scene_engine import catalog
+from scene_engine.catalog import save_svg_asset
 
 app = FastAPI(title="Pictogram Studio")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+)
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
 
@@ -33,6 +37,17 @@ def get_assets() -> JSONResponse:
     return JSONResponse({"assets": catalog()})
 
 
+@app.post("/api/assets")
+async def save_asset(req: SaveAssetRequest) -> JSONResponse:
+    try:
+        asset = save_svg_asset(req.name, req.svg, overwrite=req.overwrite)
+        return JSONResponse({"asset": asset, "assets": catalog()})
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/generate")
 async def generate(req: GenerateRequest) -> JSONResponse:
     try:
@@ -41,16 +56,18 @@ async def generate(req: GenerateRequest) -> JSONResponse:
         try:
             image = await generate_image_data(req.prompt, req.history)
             vectorized = vectorize_data_uri(image, colors=10)
-            return JSONResponse({
-                "mode": "fallback-image",
-                "planner": "image-vectorized",
-                "summary": "Raster fallback rendered and vectorized.",
-                "scene": None,
-                "svg": vectorized["svg"],
-                "warnings": [f"Structured generation failed: {structured_error}"],
-                "fallbackUsed": True,
-                "image": image,
-            })
+            return JSONResponse(
+                {
+                    "mode": "fallback-image",
+                    "planner": "image-vectorized",
+                    "summary": "Raster fallback rendered and vectorized.",
+                    "scene": None,
+                    "svg": vectorized["svg"],
+                    "warnings": [f"Structured generation failed: {structured_error}"],
+                    "fallbackUsed": True,
+                    "image": image,
+                }
+            )
         except Exception as fallback_error:
             raise HTTPException(
                 status_code=500,
@@ -61,7 +78,9 @@ async def generate(req: GenerateRequest) -> JSONResponse:
 @app.post("/api/chat")
 async def chat(req: ChatRequest) -> JSONResponse:
     try:
-        return JSONResponse({"image": await generate_image_data(req.prompt, req.history)})
+        return JSONResponse(
+            {"image": await generate_image_data(req.prompt, req.history)}
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -69,6 +88,13 @@ async def chat(req: ChatRequest) -> JSONResponse:
 @app.post("/api/to-svg")
 async def to_svg(req: ToSvgRequest) -> JSONResponse:
     try:
-        return JSONResponse(vectorize_data_uri(req.image, colors=req.colors))
+        return JSONResponse(
+            vectorize_data_uri(
+                req.image,
+                colors=req.colors,
+                transparent_background=req.transparent_background,
+                alpha_threshold=req.alpha_threshold,
+            )
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
