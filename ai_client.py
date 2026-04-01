@@ -15,8 +15,9 @@ PI_AGENT_REVIEW_URL = str(os.getenv("PI_AGENT_REVIEW_URL", PI_AGENT_URL.replace(
 SCENE_SYSTEM_PROMPT = textwrap.dedent("""
     You are a scene planner for automotive ODD pictograms.
     Produce JSON only. No markdown. No prose outside the JSON object.
-        Prefer symbolic placement over raw coordinates.
-        The output schema is:
+    Use a hybrid road-geometry plus object-placement plan.
+    Think in two internal phases: first build road geometry, then place objects onto that geometry using the same JSON language.
+    The output schema is:
     {
       "version": "odd.scene.v1",
       "canvas": {"width": 1024, "height": 768, "background": "#f8fafc"},
@@ -24,42 +25,59 @@ SCENE_SYSTEM_PROMPT = textwrap.dedent("""
       "prompt": "user prompt",
       "warnings": ["optional warning"],
             "layoutPlan": {
-                "layout": {"template": "straight_road|crosswalk_road|intersection|t_junction|roundabout|highway_3_lane"},
-                "static": [
+                "map": {"cols": 10, "rows": 10},
+                "geometry": [
                     {
-                        "id": "string",
-                        "kind": "traffic_light|tree|placeholder|...",
-                        "label": "human readable label",
-                        "anchor": "template anchor name",
-                        "scale": 1,
+                        "id": "road_main",
+                        "kind": "road|crosswalk|intersection|t_junction|roundabout",
+                        "col": 1,
+                        "row": 3,
+                        "colSpan": 8,
+                        "rowSpan": 4,
+                        "points": [{"col": 0, "row": 4}, {"col": 11, "row": 4}],
                         "rotation": 0,
-                        "color": "#rrggbb",
+                        "laneCount": 4,
+                        "layer": 1,
+                        "props": {"roadRole": "arterial"}
+                    }
+                ],
+                "environment": [
+                    {
+                        "id": "tree1",
+                        "kind": "tree|traffic_light|placeholder",
+                        "col": 0,
+                        "row": 1,
+                        "colSpan": 1,
+                        "rowSpan": 1,
+                        "rotation": 0,
+                        "layer": 2,
                         "props": {}
                     }
                 ],
-                "dynamic": [
+                "actors": [
                     {
-                        "id": "string",
+                        "id": "car1",
                         "kind": "car|truck|bus|pedestrian|bicycle|placeholder",
-                        "label": "human readable label",
-                        "lane": "template lane name",
-                        "laneIndex": 1,
-                        "slot": 1,
-                        "slotCount": 5,
-                        "s": 0.0,
-                        "heading": "forward|reverse",
-                        "relation": "behind:other_id|ahead_of:other_id|approaching:other_id|next_to:other_id",
-                        "scale": 1,
-                        "color": "#rrggbb",
+                        "col": 7,
+                        "row": 4,
+                        "colSpan": 2,
+                        "rowSpan": 1,
+                        "pathId": "road_main",
+                        "s": 0.8,
+                        "laneIndex": 3,
+                        "rotation": 180,
+                        "layer": 10,
                         "props": {}
                     }
                 ],
                 "annotations": [
                     {
-                        "id": "string",
+                        "id": "arrow1",
                         "kind": "arrow|placeholder",
-                        "anchor": "template anchor name",
+                        "col": 5,
+                        "row": 2,
                         "rotation": 0,
+                        "layer": 4,
                         "props": {}
                     }
                 ]
@@ -77,24 +95,29 @@ SCENE_SYSTEM_PROMPT = textwrap.dedent("""
     }
     Rules:
     - Use only the allowed kinds.
-    - Always provide `layoutPlan` unless the prompt truly cannot be expressed with the available templates.
+    - Always provide `layoutPlan` unless the prompt truly cannot be expressed with the available assets.
     - Behave like an asset-aware planning agent: first use the asset registry and resolved prompt entities, then compose the scene plan.
     - Prefer top-down, simple, flat pictogram scenes.
     - Keep the scene concise and editable.
     - If an asset is missing, emit kind="placeholder" with a short label.
-    - Roads should be represented through `layoutPlan.layout.template`; only use raw road elements as fallback.
+    - Use `layoutPlan.map.cols` and `layoutPlan.map.rows` between 10 and 15. Pick the smallest size that comfortably fits the scene.
+    - Represent the scene as a hybrid segment map: geometry occupies grid rectangles or point-defined road centerlines, actors occupy grid cells/spans or follow a road path.
+    - For a complex arterial, staggered junction, or curved connector, use `geometry[].points` to define the road centerline in grid space.
+    - `points` are grid coordinates along the road centerline. Use them for arterials, curved roads, side-road connectors, and staggered approaches.
+    - Roads and crossings belong in `layoutPlan.geometry`, not `actors`.
+    - Crosswalks are overlays on top of road geometry and should usually use layer 2.
+    - Actors should usually use layer 10.
+    - Controls like stop/yield signs and traffic lights should usually use layer 4; roadside environment like trees should usually use layer 5; annotations can use layer 20.
+    - Use 0° for right/east, 90° for down/south, 180° for left/west, -90° for up/north.
+    - Cars usually occupy 2x1 segments, trucks and buses 3x1, pedestrians 1x1.
+    - For a crossing pedestrian, place the pedestrian on crosswalk segments with a crossing rotation instead of inventing lane semantics.
+    - When an actor belongs on a road, prefer `pathId` + `s` + `laneIndex` over vague lane text.
+    - Prefer direct segment placement over `lane`, `slot`, `heading`, or relation phrases.
     - Use arrow props.style values such as straight, left, right, merge, uturn.
-    - In `layoutPlan.dynamic`, use `lane` plus progress `s` from 0.0 to 1.0 instead of `x` and `y`.
-    - Prefer `laneIndex` + `slot` for vehicles when a laneed road/highway template is used.
-    - `slot` means ordinal position along the lane, not pixel coordinates.
-    - In `layoutPlan.static`, bind assets to named anchors instead of inventing coordinates.
     - If you include `elements`, keep them minimal and consistent with `layoutPlan`.
     - Respect each asset's default footprint, orientation, and placement guidance.
     - Respect each asset's catalog group, layer group, and allowed placements.
-    - Use layer bands consistently: layout near 0-1, environment near 4-5, traffic near 10-11, actors near 12-13, props near 16, annotations near 20+.
-    - Vehicles should be centered on lanes, not stacked side-by-side without road alignment.
-    - Trucks and buses should occupy more space than cars; pedestrians belong beside roads or on crossings.
-    - Use rotation to align vehicles with road direction: 0/180 for horizontal travel, 90/-90 for vertical travel.
+    - Use layered rendering consistently: arterial/base roads 1, connector roads 2, markings/crosswalks 3, controls 4, environment 5, actors 10, annotations 20.
 """).strip()
 
 IMAGE_SYSTEM_PROMPT = textwrap.dedent("""
@@ -144,6 +167,7 @@ async def call_sidecar_scene_planner(user_payload: dict[str, Any]) -> dict[str, 
         "raw_text": data.get("raw_text") or "",
         "raw_json": raw_json,
         "tool_trace": data.get("tool_trace") or [],
+        "geometry_draft": data.get("geometry_draft") if isinstance(data.get("geometry_draft"), dict) else None,
     }
 
 
@@ -172,11 +196,12 @@ async def call_scene_reviewer(review_payload: dict[str, Any]) -> dict[str, Any]:
             "text": textwrap.dedent(
                 f"""
                 You are a multimodal scene reviewer for automotive pictograms.
-                Inspect the provided symbolic scene JSON and the rendered PNG.
+                Inspect the provided hybrid road-geometry scene JSON and the rendered PNG.
                 If the scene is good, return:
                 {{"approved": true, "issues": [], "summary": "..."}}
                 If there are issues, return:
-                {{"approved": false, "issues": ["..."], "layoutPlan": {{... corrected symbolic layout plan ...}}, "summary": "..."}}
+                {{"approved": false, "issues": ["..."], "layoutPlan": {{... corrected grid layout plan ...}}, "summary": "..."}}
+                Prefer correcting road centerline points, road roles, pathId/s/laneIndex actor placement, grid segments, rotations, and layers.
                 Output JSON only.
 
                 Review payload:
@@ -250,11 +275,14 @@ async def call_text_scene_planner(req: GenerateRequest) -> dict[str, Any]:
     }
 
     tool_trace: list[dict[str, Any]] = []
+    geometry_draft: dict[str, Any] | None = None
     if PLANNER_BACKEND in {"sidecar", "pi-sidecar", "agent-sidecar"}:
         sidecar_result = await call_sidecar_scene_planner(user_payload)
         planned = sidecar_result.get("raw_json") or {}
         content = str(sidecar_result.get("raw_text") or "")
         tool_trace = list(sidecar_result.get("tool_trace") or [])
+        geometry_draft_value = sidecar_result.get("geometry_draft")
+        geometry_draft = geometry_draft_value if isinstance(geometry_draft_value, dict) else None
     else:
         payload = {
             "model": TEXT_MODEL,
@@ -288,6 +316,7 @@ async def call_text_scene_planner(req: GenerateRequest) -> dict[str, Any]:
         "raw_json": planned,
         "asset_resolution": asset_resolution,
         "tool_trace": tool_trace,
+        "geometry_draft": geometry_draft,
     }
 
 

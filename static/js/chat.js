@@ -50,7 +50,9 @@ function updatePlannerTrace(data) {
   const layoutPlan = data.plannerLayoutPlan;
   const assetResolution = data.plannerAssetResolution;
   const toolTrace = data.plannerToolTrace;
+  const geometryDraft = data.plannerGeometryDraft;
   const firstPassScene = data.firstPassScene;
+  const firstPassPng = data.firstPassPng;
   const reviewRawJson = data.reviewRawJson;
   const reviewRawText = data.reviewRawText;
   const reviewApplied = data.reviewApplied;
@@ -61,7 +63,7 @@ function updatePlannerTrace(data) {
   const parts = [
     `<div class="trace-row"><strong>Planner:</strong> ${planner}</div>`,
     `<div class="trace-row"><strong>Fallback:</strong> ${data.fallbackUsed ? 'yes' : 'no'}</div>`,
-    `<div class="trace-row"><strong>Symbolic layout plan:</strong> ${data.plannerUsedLayoutPlan ? 'yes' : 'no'}</div>`,
+    `<div class="trace-row"><strong>Hybrid layout plan:</strong> ${data.plannerUsedLayoutPlan ? 'yes' : 'no'}</div>`,
     `<div class="trace-row"><strong>Review applied:</strong> ${reviewApplied ? 'yes' : 'no'}</div>`,
   ];
 
@@ -71,13 +73,18 @@ function updatePlannerTrace(data) {
   }
 
   if (layoutPlan) {
-    parts.push('<div class="trace-label">Symbolic layout plan</div>');
+    parts.push('<div class="trace-label">Hybrid layout plan</div>');
     parts.push(`<pre class="trace-pre">${escapeHtml(formatJsonBlock(layoutPlan))}</pre>`);
   }
 
   if (assetResolution) {
     parts.push('<div class="trace-label">Asset resolution</div>');
     parts.push(`<pre class="trace-pre">${escapeHtml(formatJsonBlock(assetResolution))}</pre>`);
+  }
+
+  if (geometryDraft) {
+    parts.push('<div class="trace-label">Geometry phase draft</div>');
+    parts.push(`<pre class="trace-pre">${escapeHtml(formatJsonBlock(geometryDraft))}</pre>`);
   }
 
   if (toolTrace && toolTrace.length) {
@@ -103,6 +110,11 @@ function updatePlannerTrace(data) {
   if (firstPassScene) {
     parts.push('<div class="trace-label">First pass scene</div>');
     parts.push(`<pre class="trace-pre">${escapeHtml(formatJsonBlock(firstPassScene))}</pre>`);
+  }
+
+  if (firstPassPng) {
+    parts.push('<div class="trace-label">First pass preview</div>');
+    parts.push(`<div class="trace-preview"><img class="trace-preview-image" src="${escapeHtml(firstPassPng)}" alt="First pass preview"></div>`);
   }
 
   if (reviewRawJson) {
@@ -171,6 +183,27 @@ export function appendSpinner(text) {
   return wrapper;
 }
 
+export function appendImageMessage(label, src) {
+  if (!src) return null;
+  const wrapper = document.createElement('div');
+  wrapper.className = 'msg assistant preview-msg';
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble preview-bubble';
+  const caption = document.createElement('div');
+  caption.className = 'preview-label';
+  caption.textContent = label;
+  const image = document.createElement('img');
+  image.className = 'preview-image';
+  image.alt = label;
+  image.src = src;
+  bubble.appendChild(caption);
+  bubble.appendChild(image);
+  wrapper.appendChild(bubble);
+  dom.messages.appendChild(wrapper);
+  dom.messages.scrollTop = dom.messages.scrollHeight;
+  return wrapper;
+}
+
 function startGenerationStageSpinner(spinner) {
   const stages = ['fetching assets', 'generating first pass', 'reviewing', 'final render'];
   let index = 0;
@@ -220,6 +253,7 @@ export async function sendPrompt() {
     if (data.reviewApplied) chips.push({ text: 'review revised pass' });
     else if (data.reviewRawJson || data.reviewRawText) chips.push({ text: 'review completed' });
     (data.warnings || []).slice(0, 2).forEach((warning) => chips.push({ text: warning, warning: true }));
+    if (data.firstPassPng) appendImageMessage('First pass preview', data.firstPassPng);
     appendMessage('assistant', data.summary || 'Scene rendered on canvas.', chips);
     state.svgFilename = `${(prompt.slice(0, 32).replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'pictogram')}.svg`;
     showToast(data.mode === 'fallback-image' ? 'Fallback render applied' : 'Scene rendered on canvas');

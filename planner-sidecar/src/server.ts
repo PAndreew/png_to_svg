@@ -14,9 +14,12 @@ type PlannerRequest = {
   asset_registry?: Record<string, unknown>;
   layout_templates?: Record<string, unknown>;
   asset_specs?: Array<Record<string, unknown>>;
+  geometry_draft?: Record<string, unknown> | null;
+  planning_phase?: string;
 };
 
 type ToolTraceItem = {
+  phase?: string;
   tool: string;
   args: Record<string, unknown>;
   resultPreview: string;
@@ -32,11 +35,11 @@ const TEXT_MODEL = process.env.OPENROUTER_TEXT_MODEL || process.env.TEXT_MODEL |
 const REVIEW_MODEL = process.env.OPENROUTER_REVIEW_MODEL || process.env.REVIEW_MODEL || TEXT_MODEL;
 const OPENROUTER_URL = process.env.OPENROUTER_URL || "https://openrouter.ai/api/v1/chat/completions";
 
-const SYSTEM_PROMPT = `You are a planning agent for an automotive pictogram generator.
+const GEOMETRY_SYSTEM_PROMPT = `You are the road-geometry planning phase for an automotive pictogram generator.
 Use tools when the prompt contains typos, synonyms, or ambiguous asset names.
 Always search the asset catalog when you are not fully certain about an asset name.
 Produce JSON only.
-Return a scene plan with symbolic placement, not pixel coordinates.
+Return a scene plan with a hybrid segment-grid plus road-centerline layout, not pixel coordinates.
 
 Required output shape:
 {
@@ -45,25 +48,46 @@ Required output shape:
   "prompt": "original user prompt",
   "warnings": [],
   "layoutPlan": {
-    "layout": { "template": "straight_road|crosswalk_road|intersection|t_junction|roundabout|highway_3_lane" },
-    "static": [
-      {"id": "tl1", "kind": "traffic_light", "anchor": "roadside_top"}
+    "map": { "cols": 10, "rows": 10 },
+    "geometry": [
+      {"id": "arterial_main", "kind": "road", "points": [{"col": 0, "row": 4}, {"col": 11, "row": 4}], "rowSpan": 4, "laneCount": 4, "layer": 1, "props": {"roadRole": "arterial"}},
+      {"id": "crosswalk1", "kind": "crosswalk", "col": 5, "row": 3, "colSpan": 1, "rowSpan": 4, "layer": 3}
     ],
-    "dynamic": [
-      {"id": "car1", "kind": "car", "lane": "lane_2", "laneIndex": 2, "slot": 1, "slotCount": 4, "heading": "forward"}
+    "environment": [
+      {"id": "yield1", "kind": "traffic_light|placeholder", "col": 8, "row": 2, "rotation": 0, "layer": 4}
     ],
+    "actors": [],
     "annotations": []
   }
 }
 
 Rules:
 - Use only assets that exist in the catalog or placeholders.
-- Prefer laneIndex + slot for vehicles on multi-lane templates.
-- slot means ordinal position along the lane, not coordinates.
-- Use anchors for static assets.
+- Choose map size between 10x10 and 15x15 based on scene complexity.
+- First solve only geometry and controls. Leave actors empty in this phase.
+- Use geometry rectangles for simple roads and use geometry points for arterials, connectors, curves, and staggered side roads.
+- A road geometry item may include points, laneCount, rowSpan, and props.roadRole.
+- Use layer bands: arterial/base roads 1, connector roads 2, markings/crosswalks 3, controls 4, environment 5.
+- For a non-signalized staggered intersection, prefer one arterial road path and separate side-road connector paths with different ids.
 - If a prompt term is misspelled, use the search_assets tool and resolve it to the closest valid asset.
 - Keep the scene compact and editable.
-- Roads/layout must come from layoutPlan.layout.template.`;
+- Roads/layout must come from layoutPlan.geometry, not pixel coordinates.`;
+
+const OBJECT_SYSTEM_PROMPT = `You are the object-placement phase for an automotive pictogram generator.
+You receive an already planned road geometry draft.
+Preserve the map and geometry unless there is a clear mistake.
+Produce JSON only.
+Return the same scene schema, but now add actors and optional annotations using the same layoutPlan language.
+
+Rules:
+- Keep layoutPlan.map and layoutPlan.geometry from the geometry draft whenever possible.
+- Place moving actors with either direct grid placement or path-following using pathId + s + laneIndex.
+- When a vehicle belongs on a road, prefer pathId + s + laneIndex over vague language.
+- Cars usually occupy 2x1 segments, trucks and buses 3x1, pedestrians 1x1.
+- Actors should usually use layer 10. Annotations should usually use layer 20.
+- Preserve environment/control items unless they conflict with the prompt.
+- For crossing pedestrians, place them on crosswalk geometry, not on arbitrary road lanes.
+- Output the full final JSON object, not a diff.`;
 
 const REVIEW_SYSTEM_PROMPT = `You are a multimodal reviewer for automotive pictogram scenes.
 You receive:
@@ -76,8 +100,10 @@ Focus on mistakes such as:
 - wrong asset chosen
 - missing asset
 - pedestrian not on crosswalk when prompt implies it
-- vehicle in wrong lane or wrong ordering slot
-- traffic lights or static assets attached to poor anchors
+- vehicle placed in the wrong grid segment or with the wrong rotation
+- vehicle attached to the wrong road path or wrong progress along the path
+- arterial road missing, broken, or incorrectly represented in the geometry phase
+- traffic lights or static assets attached to poor grid segments
 - scene too cluttered or semantically inconsistent
 
 Output JSON only.
@@ -93,12 +119,12 @@ If changes are needed, return:
   "approved": false,
   "issues": ["issue 1", "issue 2"],
   "summary": "short review summary",
-  "layoutPlan": { ... corrected symbolic layout plan ... }
+  "layoutPlan": { ... corrected grid layout plan ... }
 }
 
 Do not output prose outside JSON.
 Do not output pixel coordinates unless unavoidable.
-Prefer correcting laneIndex, slot, slotCount, lane, anchors, relations, and template choice.`;
+Prefer correcting map size, geometry points, road roles, object pathId/s/laneIndex, grid segments, spans, rotation, and layers.`;
 
 const searchAssetsSchema = Type.Object({
   query: Type.String({ description: "Asset name, typo, or concept to search for" }),
@@ -289,21 +315,15 @@ async function executeToolCall(
   return tool.run(args, request);
 }
 
-async function planScene(request: PlannerRequest) {
+async function runPlanningPhase(
+  phase: string,
+  systemPrompt: string,
+  request: PlannerRequest,
+  userPayload: Record<string, unknown>,
+) {
   const toolTrace: ToolTraceItem[] = [];
-  const userPayload = {
-    prompt: request.prompt,
-    current_scene: request.current_scene ?? null,
-    recent_history: request.recent_history ?? request.history ?? [],
-    allowed_assets: request.allowed_assets ?? [],
-    asset_resolution: request.asset_resolution ?? {},
-    asset_registry: request.asset_registry ?? {},
-    layout_templates: request.layout_templates ?? {},
-    asset_specs: request.asset_specs ?? [],
-  };
-
   const messages: Array<Record<string, unknown>> = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: systemPrompt },
     { role: "user", content: JSON.stringify(userPayload) },
   ];
 
@@ -328,7 +348,7 @@ async function planScene(request: PlannerRequest) {
           args = {};
         }
         const result = await executeToolCall(toolName, args, request);
-        toolTrace.push({ tool: toolName, args, resultPreview: summarizeResult(result) });
+        toolTrace.push({ phase, tool: toolName, args, resultPreview: summarizeResult(result) });
         messages.push({
           role: "tool",
           tool_call_id: String(toolCall.id ?? toolName),
@@ -352,7 +372,45 @@ async function planScene(request: PlannerRequest) {
     };
   }
 
-  throw new Error("Planner sidecar exceeded tool-call turn limit");
+  throw new Error(`${phase} planner phase exceeded tool-call turn limit`);
+}
+
+async function planScene(request: PlannerRequest) {
+  const basePayload = {
+    prompt: request.prompt,
+    current_scene: request.current_scene ?? null,
+    recent_history: request.recent_history ?? request.history ?? [],
+    allowed_assets: request.allowed_assets ?? [],
+    asset_resolution: request.asset_resolution ?? {},
+    asset_registry: request.asset_registry ?? {},
+    layout_templates: request.layout_templates ?? {},
+    asset_specs: request.asset_specs ?? [],
+  };
+
+  const geometryPayload = {
+    ...basePayload,
+    planning_phase: "geometry",
+  };
+  const geometryResult = await runPlanningPhase("geometry", GEOMETRY_SYSTEM_PROMPT, request, geometryPayload);
+  const geometryRaw = geometryResult.raw_json ?? {};
+  const geometryLayoutPlan = typeof geometryRaw.layoutPlan === "object" && geometryRaw.layoutPlan
+    ? geometryRaw.layoutPlan as Record<string, unknown>
+    : geometryRaw;
+
+  const objectPayload = {
+    ...basePayload,
+    planning_phase: "objects",
+    geometry_draft: geometryLayoutPlan,
+  };
+  const objectRequest: PlannerRequest = { ...request, geometry_draft: geometryLayoutPlan, planning_phase: "objects" };
+  const objectResult = await runPlanningPhase("objects", OBJECT_SYSTEM_PROMPT, objectRequest, objectPayload);
+
+  return {
+    raw_text: objectResult.raw_text,
+    raw_json: objectResult.raw_json,
+    tool_trace: [...(geometryResult.tool_trace ?? []), ...(objectResult.tool_trace ?? [])],
+    geometry_draft: geometryRaw,
+  };
 }
 
 async function reviewScene(request: Record<string, unknown>) {

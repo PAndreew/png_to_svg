@@ -21,6 +21,8 @@ def _render_png_data_uri(svg_text: str) -> str:
         raise RuntimeError(f"CairoSVG is not available: {exc}") from exc
 
     png_bytes = cairosvg.svg2png(bytestring=svg_text.encode("utf-8"))
+    if not isinstance(png_bytes, (bytes, bytearray)):
+        raise RuntimeError("CairoSVG did not return PNG bytes")
     return "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
 
 
@@ -43,13 +45,16 @@ async def generate_structured_response(req: GenerateRequest) -> dict[str, Any]:
     planner_layout_plan: dict[str, Any] | None = None
     planner_asset_resolution: dict[str, Any] | None = None
     planner_tool_trace: list[dict[str, Any]] | None = None
+    planner_geometry_draft: dict[str, Any] | None = None
     planner_used_layout_plan = False
     review_raw_text: str | None = None
     review_raw_json: dict[str, Any] | None = None
     review_applied = False
     review_summary: str | None = None
+    review_issues: list[str] = []
     first_pass_scene: dict[str, Any] | None = None
     first_pass_svg: str | None = None
+    first_pass_png: str | None = None
     stage_log: list[dict[str, Any]] = []
 
     stage_log.append({"key": "fetching_assets", "label": "fetching assets", "status": "started"})
@@ -64,6 +69,8 @@ async def generate_structured_response(req: GenerateRequest) -> dict[str, Any]:
                 planner_raw_scene = planned.get("raw_json")
                 planner_asset_resolution = planned.get("asset_resolution")
                 planner_tool_trace = planned.get("tool_trace")
+                geometry_draft_value = planned.get("geometry_draft")
+                planner_geometry_draft = geometry_draft_value if isinstance(geometry_draft_value, dict) else None
                 raw_scene_value = planned.get("raw_json")
                 raw_scene = raw_scene_value if isinstance(raw_scene_value, dict) else {}
                 layout_plan_value = raw_scene.get("layoutPlan")
@@ -103,6 +110,10 @@ async def generate_structured_response(req: GenerateRequest) -> dict[str, Any]:
     scene["warnings"] = list(dict.fromkeys([*scene.get("warnings", []), *warnings]))
     first_pass_scene = normalize_scene(scene)
     first_pass_svg = render_scene_svg(first_pass_scene)
+    try:
+        first_pass_png = _render_png_data_uri(first_pass_svg)
+    except Exception:
+        first_pass_png = None
 
     if ENABLE_INTERNAL_REVIEW and used == "llm":
         stage_log.append({"key": "reviewing", "label": "reviewing", "status": "started"})
@@ -113,7 +124,7 @@ async def generate_structured_response(req: GenerateRequest) -> dict[str, Any]:
                     "layoutPlan": planner_layout_plan,
                     "scene": first_pass_scene,
                     "warnings": scene.get("warnings", []),
-                    "image": _render_png_data_uri(first_pass_svg),
+                    "image": first_pass_png,
                 }
             )
             review_raw_text = str(review_result.get("raw_text") or "")
@@ -122,7 +133,7 @@ async def generate_structured_response(req: GenerateRequest) -> dict[str, Any]:
                 review_summary = str(review_raw_json.get("summary") or "") or None
                 issues_value = review_raw_json.get("issues")
                 issues: list[Any] = issues_value if isinstance(issues_value, list) else []
-                warnings.extend(str(issue) for issue in issues if issue)
+                review_issues = [str(issue) for issue in issues if issue]
                 revised_layout_plan = review_raw_json.get("layoutPlan") if isinstance(review_raw_json.get("layoutPlan"), dict) else None
                 revised_scene = review_raw_json.get("scene") if isinstance(review_raw_json.get("scene"), dict) else None
                 approved = bool(review_raw_json.get("approved", True))
@@ -138,6 +149,8 @@ async def generate_structured_response(req: GenerateRequest) -> dict[str, Any]:
                 elif not approved and revised_scene:
                     scene, scene_before_layout = _materialize_scene(revised_scene, req.prompt)
                     review_applied = True
+                elif review_issues:
+                    warnings.extend(review_issues)
             stage_log[-1]["status"] = "completed"
         except Exception as exc:
             stage_log[-1]["status"] = "failed"
@@ -163,12 +176,15 @@ async def generate_structured_response(req: GenerateRequest) -> dict[str, Any]:
         "plannerLayoutPlan": planner_layout_plan,
         "plannerAssetResolution": planner_asset_resolution,
         "plannerToolTrace": planner_tool_trace,
+        "plannerGeometryDraft": planner_geometry_draft,
         "plannerUsedLayoutPlan": planner_used_layout_plan,
         "firstPassScene": first_pass_scene,
         "firstPassSvg": first_pass_svg,
+        "firstPassPng": first_pass_png,
         "reviewRawText": review_raw_text,
         "reviewRawJson": review_raw_json,
         "reviewApplied": review_applied,
+        "reviewIssues": review_issues,
         "reviewSummary": review_summary,
         "stageLog": stage_log,
     }

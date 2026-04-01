@@ -63,6 +63,37 @@ class LayoutTemplateModel(BaseModel):
     ] = "straight_road"
 
 
+class GridMapModel(BaseModel):
+    cols: int = Field(default=10, ge=10, le=15)
+    rows: int = Field(default=10, ge=10, le=15)
+
+
+class GridPointModel(BaseModel):
+    col: float = 0.0
+    row: float = 0.0
+
+
+class GridPlacementItemModel(BaseModel):
+    id: str | None = None
+    kind: str
+    label: str | None = None
+    col: int = Field(default=0, ge=0)
+    row: int = Field(default=0, ge=0)
+    colSpan: int = Field(default=1, ge=1)
+    rowSpan: int = Field(default=1, ge=1)
+    points: list[GridPointModel] = Field(default_factory=list)
+    pathId: str | None = None
+    s: float | None = None
+    laneIndex: int | None = None
+    laneCount: int | None = None
+    laneOffset: float | None = None
+    rotation: float | None = None
+    scale: float | None = None
+    layer: int | None = None
+    color: str | None = None
+    props: dict[str, Any] = Field(default_factory=dict)
+
+
 class StaticPlanItemModel(BaseModel):
     id: str | None = None
     kind: str
@@ -84,7 +115,7 @@ class DynamicPlanItemModel(BaseModel):
     slot: int | None = None
     slotCount: int | None = None
     s: float | None = None
-    heading: Literal["forward", "reverse"] = "forward"
+    heading: str = "forward"
     relation: str | None = None
     scale: float | None = None
     color: str | None = None
@@ -105,7 +136,11 @@ class AnnotationPlanItemModel(BaseModel):
 class LayoutPlanModel(BaseModel):
     title: str | None = None
     warnings: list[str] = Field(default_factory=list)
+    map: GridMapModel | None = None
+    geometry: list[GridPlacementItemModel] = Field(default_factory=list)
+    environment: list[GridPlacementItemModel] = Field(default_factory=list)
+    actors: list[GridPlacementItemModel] = Field(default_factory=list)
     layout: LayoutTemplateModel = Field(default_factory=LayoutTemplateModel)
     static: list[StaticPlanItemModel] = Field(default_factory=list)
     dynamic: list[DynamicPlanItemModel] = Field(default_factory=list)
-    annotations: list[AnnotationPlanItemModel] = Field(default_factory=list)
+    annotations: list[AnnotationPlanItemModel | GridPlacementItemModel] = Field(default_factory=list)

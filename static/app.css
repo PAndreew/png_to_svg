@@ -207,6 +207,32 @@
       border-top-color: var(--accent);
       animation: spin 0.8s linear infinite;
     }
+    .preview-bubble {
+      display: inline-flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: flex-start;
+    }
+    .preview-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .preview-image,
+    .trace-preview-image {
+      display: block;
+      width: 148px;
+      max-width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: #fff;
+      box-shadow: 0 8px 18px rgba(108, 126, 160, 0.12);
+    }
+    .trace-preview {
+      padding: 8px 0 4px;
+    }
     @keyframes spin { to { transform: rotate(360deg); } }
 
     #chat-input-row {

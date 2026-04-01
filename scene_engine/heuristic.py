@@ -595,7 +595,11 @@ def _lane_paths(layout: str) -> dict[str, list[tuple[float, float]]]:
         },
         "crosswalk": {
             "eastbound": [(220, 348), (804, 348)],
+            "eastbound_1": [(220, 330), (804, 330)],
+            "eastbound_2": [(220, 366), (804, 366)],
             "westbound": [(804, 420), (220, 420)],
+            "westbound_1": [(804, 402), (220, 402)],
+            "westbound_2": [(804, 438), (220, 438)],
         },
         "intersection": {
             "west_entry": [(120, 420), (420, 420)],
@@ -676,24 +680,55 @@ def _static_anchors(layout: str) -> dict[str, tuple[float, float]]:
 
 
 def layout_planner_context() -> dict[str, Any]:
-    templates = [
-        {"template": "straight_road", "layoutKind": "road"},
-        {"template": "highway_3_lane", "layoutKind": "highway"},
-        {"template": "crosswalk_road", "layoutKind": "crosswalk"},
-        {"template": "intersection", "layoutKind": "intersection"},
-        {"template": "t_junction", "layoutKind": "t_junction"},
-        {"template": "roundabout", "layoutKind": "roundabout"},
-    ]
     return {
-        "templates": [
+        "grid": {
+            "minCols": 10,
+            "maxCols": 15,
+            "minRows": 10,
+            "maxRows": 15,
+            "chooseSizeByComplexity": True,
+        },
+        "geometryPrimitives": [
             {
-                "template": item["template"],
-                "layoutKind": item["layoutKind"],
-                "lanes": sorted(_lane_paths(item["layoutKind"]).keys()),
-                "anchors": sorted(_static_anchors(item["layoutKind"]).keys()),
-            }
-            for item in templates
-        ]
+                "kind": "road",
+                "notes": "Use either a centered grid rectangle for straight corridors or a path with points for arterials, connectors, and staggered side roads.",
+            },
+            {
+                "kind": "crosswalk",
+                "notes": "Overlay on top of road geometry. Use layer 2 and span the full road width at the crossing point.",
+            },
+            {
+                "kind": "intersection",
+                "notes": "Use when the road geometry is fundamentally a four-way junction instead of a single corridor.",
+            },
+            {
+                "kind": "t_junction",
+                "notes": "Use when one road terminates into another.",
+            },
+            {
+                "kind": "roundabout",
+                "notes": "Use when the central control geometry is circular.",
+            },
+        ],
+        "layerGuide": {
+            "roadBase": 1,
+            "roadConnectors": 2,
+            "roadMarkings": 3,
+            "controls": 4,
+            "environment": 5,
+            "actors": 10,
+            "annotations": 20,
+        },
+        "placementRules": [
+            "Choose map size between 10x10 and 15x15 based on scene complexity.",
+            "Use geometry rectangles instead of semantic lane names whenever possible.",
+            "For complex road networks, keep the same schema but describe roads as geometry items with points.",
+            "When geometry uses points, the points describe the road centerline in grid space and the renderer will build a simple spline-like road ribbon from them.",
+            "Use numeric rotation degrees for placed assets.",
+            "Cars usually occupy 2x1 segments, trucks and buses 3x1, pedestrians 1x1.",
+            "For crosswalk scenes, place the pedestrian on crosswalk segments, not inside a vehicle-only road segment unless the prompt explicitly says so.",
+            "Actors may either use direct grid placement or path-following with pathId and s from 0.0 to 1.0.",
+        ],
     }
 
 
@@ -768,9 +803,22 @@ def _resolve_anchor(
 def _resolve_lane_name(layout: str, item: dict[str, Any], fallback: str) -> str:
     lanes = _lane_paths(layout)
     named_lane = str(item.get("lane") or "").strip()
-    if named_lane in lanes:
-        return named_lane
     lane_index_raw = item.get("laneIndex")
+    if named_lane:
+        if lane_index_raw is not None:
+            try:
+                lane_index = max(1, int(lane_index_raw))
+                grouped = sorted(
+                    key
+                    for key in lanes.keys()
+                    if key == named_lane or key.startswith(f"{named_lane}_")
+                )
+                if grouped:
+                    return grouped[min(lane_index - 1, len(grouped) - 1)]
+            except Exception:
+                pass
+        if named_lane in lanes:
+            return named_lane
     if lane_index_raw is not None:
         try:
             lane_index = max(1, int(lane_index_raw))
@@ -797,11 +845,420 @@ def _resolve_progress(item: dict[str, Any], index: int) -> float:
     return min(0.25 + index * 0.18, 0.85)
 
 
+def _heading_rotation_override(base_rotation: float, heading: Any) -> float:
+    normalized = str(heading or "forward").strip().lower()
+    if normalized in {"", "forward", "lane", "same"}:
+        return float(base_rotation)
+    if normalized in {"reverse", "backward", "opposite"}:
+        return (float(base_rotation) + 180.0) % 360.0
+    cardinal_map = {
+        "east": 0.0,
+        "right": 0.0,
+        "west": 180.0,
+        "left": 180.0,
+        "south": 90.0,
+        "down": 90.0,
+        "north": -90.0,
+        "up": -90.0,
+    }
+    return float(cardinal_map.get(normalized, base_rotation))
+
+
+def _crosswalk_pedestrian_path(
+    item: dict[str, Any],
+) -> list[tuple[float, float]] | None:
+    heading = str(item.get("heading") or "").strip().lower()
+    if heading not in {"north", "south", "up", "down"}:
+        return None
+    lane_group = str(item.get("lane") or "eastbound").strip().lower() or "eastbound"
+    try:
+        lane_index = max(1, int(item.get("laneIndex") or 1))
+    except Exception:
+        lane_index = 1
+    stripe_x = {
+        ("eastbound", 1): 490.0,
+        ("eastbound", 2): 512.0,
+        ("westbound", 1): 534.0,
+        ("westbound", 2): 556.0,
+    }.get((lane_group, lane_index), 512.0)
+    if heading in {"north", "up"}:
+        return [(stripe_x, 476.0), (stripe_x, 292.0)]
+    return [(stripe_x, 292.0), (stripe_x, 476.0)]
+
+
+def _structural_kinds_for_layout(layout: str) -> set[str]:
+    return {
+        "road": {"road"},
+        "highway": {"highway"},
+        "crosswalk": {"road", "crosswalk"},
+        "intersection": {"intersection"},
+        "t_junction": {"t_junction"},
+        "roundabout": {"roundabout"},
+    }.get(layout, set())
+
+
+def _is_grid_layout_plan(layout_plan: dict[str, Any]) -> bool:
+    return any(
+        key in layout_plan
+        for key in ("map", "geometry", "environment", "actors")
+    )
+
+
+def _grid_int(item: dict[str, Any], key: str, default: int, minimum: int = 0) -> int:
+    props_value = item.get("props")
+    props: dict[str, Any] = props_value if isinstance(props_value, dict) else {}
+    raw = item.get(key)
+    if raw is None:
+        raw = props.get(key)
+    try:
+        return max(minimum, int(raw if raw is not None else default))
+    except Exception:
+        return default
+
+
+def _grid_rotation_value(value: Any, default: float = 0.0) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip().lower()
+    if not text:
+        return float(default)
+    aliases = {
+        "east": 0.0,
+        "right": 0.0,
+        "eastbound": 0.0,
+        "horizontal": 0.0,
+        "west": 180.0,
+        "left": 180.0,
+        "westbound": 180.0,
+        "south": 90.0,
+        "down": 90.0,
+        "southbound": 90.0,
+        "vertical": 90.0,
+        "north": -90.0,
+        "up": -90.0,
+        "northbound": -90.0,
+    }
+    return float(aliases.get(text, default))
+
+
+def _grid_float(item: dict[str, Any], key: str, default: float) -> float:
+    props_value = item.get("props")
+    props: dict[str, Any] = props_value if isinstance(props_value, dict) else {}
+    raw = item.get(key)
+    if raw is None:
+        raw = props.get(key)
+    try:
+        return float(raw if raw is not None else default)
+    except Exception:
+        return float(default)
+
+
+def _grid_metrics(scene: dict[str, Any], layout_plan: dict[str, Any]) -> dict[str, float | int]:
+    map_value = layout_plan.get("map")
+    map_info = map_value if isinstance(map_value, dict) else {}
+    cols = max(10, min(15, _grid_int(map_info, "cols", 10, 10)))
+    rows = max(10, min(15, _grid_int(map_info, "rows", 10, 10)))
+    canvas = scene.get("canvas") or {"width": 1024, "height": 768}
+    width = float(canvas.get("width") or 1024)
+    height = float(canvas.get("height") or 768)
+    margin_x = 96.0
+    margin_y = 84.0
+    cell = min((width - margin_x * 2) / cols, (height - margin_y * 2) / rows)
+    grid_width = cols * cell
+    grid_height = rows * cell
+    origin_x = (width - grid_width) / 2.0
+    origin_y = (height - grid_height) / 2.0
+    return {
+        "cols": cols,
+        "rows": rows,
+        "cell": cell,
+        "origin_x": origin_x,
+        "origin_y": origin_y,
+    }
+
+
+def _grid_point_to_canvas(
+    col: float,
+    row: float,
+    metrics: dict[str, float | int],
+) -> tuple[float, float]:
+    cell = float(metrics["cell"])
+    origin_x = float(metrics["origin_x"])
+    origin_y = float(metrics["origin_y"])
+    x = origin_x + (float(col) + 0.5) * cell
+    y = origin_y + (float(row) + 0.5) * cell
+    return x, y
+
+
+def _grid_path_points(
+    item: dict[str, Any],
+    metrics: dict[str, float | int],
+) -> list[tuple[float, float]]:
+    item_points = item.get("points")
+    points_value = item_points if isinstance(item_points, list) and item_points else item.get("props", {}).get("points")
+    if not isinstance(points_value, list):
+        return []
+    result: list[tuple[float, float]] = []
+    for point in points_value:
+        if not isinstance(point, dict):
+            continue
+        result.append(
+            _grid_point_to_canvas(
+                float(point.get("col", 0.0)),
+                float(point.get("row", 0.0)),
+                metrics,
+            )
+        )
+    return result
+
+
+def _grid_rect(item: dict[str, Any], metrics: dict[str, float | int]) -> tuple[float, float, float, float]:
+    cell = float(metrics["cell"])
+    origin_x = float(metrics["origin_x"])
+    origin_y = float(metrics["origin_y"])
+    cols = int(metrics["cols"])
+    rows = int(metrics["rows"])
+    col = min(cols - 1, _grid_int(item, "col", 0, 0))
+    row = min(rows - 1, _grid_int(item, "row", 0, 0))
+    col_span = max(1, min(cols - col, _grid_int(item, "colSpan", 1, 1)))
+    row_span = max(1, min(rows - row, _grid_int(item, "rowSpan", 1, 1)))
+    x = origin_x + (col + col_span / 2.0) * cell
+    y = origin_y + (row + row_span / 2.0) * cell
+    return x, y, col_span * cell, row_span * cell
+
+
+def _grid_scale(kind: str, item: dict[str, Any], metrics: dict[str, float | int]) -> float:
+    explicit = item.get("scale")
+    if explicit is not None:
+        try:
+            return float(explicit)
+        except Exception:
+            pass
+    _, _, width, height = _grid_rect(item, metrics)
+    spec = asset_spec(kind)
+    footprint_value = spec.get("footprint")
+    footprint: dict[str, Any] = footprint_value if isinstance(footprint_value, dict) else {}
+    base_width = float(footprint.get("width") or max(width, 1.0))
+    base_height = float(footprint.get("height") or max(height, 1.0))
+    target_width = max(width * 0.82, float(metrics["cell"]) * 0.72)
+    target_height = max(height * 0.82, float(metrics["cell"]) * 0.72)
+    return max(0.35, min(target_width / max(base_width, 1.0), target_height / max(base_height, 1.0)))
+
+
+def _grid_default_layer(kind: str, fallback: int = 3) -> int:
+    if kind in {"road", "intersection", "t_junction", "roundabout"}:
+        return 1
+    if kind == "crosswalk":
+        return 3
+    if kind in {"traffic_light"}:
+        return 4
+    if kind in {"tree"}:
+        return 5
+    if kind in {"car", "truck", "bus", "pedestrian", "bicycle"}:
+        return 10
+    if kind == "arrow":
+        return 20
+    spec = asset_spec(kind)
+    try:
+        return int(spec.get("layer") or fallback)
+    except Exception:
+        return fallback
+
+
+def _make_grid_element(
+    kind: str,
+    item: dict[str, Any],
+    metrics: dict[str, float | int],
+    *,
+    default_layer: int,
+) -> dict[str, Any]:
+    x, y, width, height = _grid_rect(item, metrics)
+    rotation = _grid_rotation_value(item.get("rotation"), 0.0)
+    layer = _grid_int(item, "layer", _grid_default_layer(kind, default_layer), 0)
+    props = dict(item.get("props") or {}) if isinstance(item.get("props"), dict) else {}
+    path_points = _grid_path_points(item, metrics)
+
+    if kind == "road" and path_points:
+        lane_count = _grid_int(item, "laneCount", _grid_int({"props": props}, "laneCount", 2, 1), 1)
+        width_segments = _grid_float({"props": props}, "widthSegments", _grid_float(item, "rowSpan", 2.0))
+        road_width = max(float(metrics["cell"]) * width_segments, float(metrics["cell"]) * 1.6)
+        road_role = str(props.get("roadRole") or item.get("label") or "road").strip().lower()
+        props = {
+            **props,
+            "pathPoints": path_points,
+            "width": round(road_width, 2),
+            "lanes": lane_count,
+            "roadRole": road_role,
+        }
+        x, y, rotation = 0.0, 0.0, 0.0
+        scale = 1.0
+    elif kind in {"road", "crosswalk"}:
+        if item.get("rotation") is None:
+            rotation = 90.0 if height > width else 0.0
+        major = max(width, height)
+        minor = min(width, height)
+        props = {
+            **props,
+            "length": round(major, 2),
+            "width": round(minor, 2),
+        }
+        if kind == "road" and "lanes" not in props:
+            props["lanes"] = max(1, min(4, int(round(minor / max(float(metrics["cell"]), 1.0)))))
+        scale = 1.0
+    elif kind in {"intersection", "t_junction", "roundabout"}:
+        scale = _grid_scale(kind, item, metrics)
+    else:
+        scale = _grid_scale(kind, item, metrics)
+
+    element = make_element(
+        kind,
+        x=x,
+        y=y,
+        rotation=rotation,
+        scale=scale,
+        color=item.get("color") or None,
+        layer=layer,
+        label=str(item.get("label") or "") or None,
+        props=props,
+    )
+    if item.get("id"):
+        element["id"] = str(item["id"])
+    return element
+
+
+def _sample_grid_actor_on_path(
+    item: dict[str, Any],
+    path_points: list[tuple[float, float]],
+    path_element: dict[str, Any],
+    metrics: dict[str, float | int],
+) -> tuple[float, float, float]:
+    s_value = max(0.0, min(1.0, _grid_float(item, "s", 0.5)))
+    x, y, rotation = _sample_polyline(path_points, s_value)
+    path_props_value = path_element.get("props")
+    path_props: dict[str, Any] = path_props_value if isinstance(path_props_value, dict) else {}
+    lane_count = max(1, _grid_int(item, "laneCount", _grid_int({"props": path_props}, "laneCount", int(path_props.get("lanes") or 2), 1), 1))
+    lane_index = max(1, min(lane_count, _grid_int(item, "laneIndex", max(1, math.ceil(lane_count / 2)), 1)))
+    explicit_offset = _grid_float(item, "laneOffset", 0.0)
+    if abs(explicit_offset) <= 1e-6:
+        half = (lane_count - 1) / 2.0
+        lane_width = float(path_props.get("width") or float(metrics["cell"]) * 2.0) / lane_count
+        explicit_offset = (lane_index - 1 - half) * lane_width
+    angle = math.radians(rotation + 90.0)
+    x += math.cos(angle) * explicit_offset
+    y += math.sin(angle) * explicit_offset
+    if item.get("rotation") is not None:
+        rotation = _grid_rotation_value(item.get("rotation"), rotation)
+    return x, y, rotation
+
+
+def build_scene_from_grid_layout_plan(
+    layout_plan: dict[str, Any],
+    prompt: str,
+    current_scene: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    scene = default_scene() if not current_scene else deep_copy_scene(current_scene)
+    scene["elements"] = []
+    scene["title"] = str(layout_plan.get("title") or build_title(prompt))
+    scene["prompt"] = prompt
+    scene["warnings"] = list(layout_plan.get("warnings") or [])
+    scene["plannerMode"] = "grid"
+    map_value = layout_plan.get("map")
+    scene["layoutTemplate"] = f"grid_{_grid_int(map_value if isinstance(map_value, dict) else {}, 'cols', 10, 10)}x{_grid_int(map_value if isinstance(map_value, dict) else {}, 'rows', 10, 10)}"
+    metrics = _grid_metrics(scene, layout_plan)
+
+    geometry_items_value = layout_plan.get("geometry")
+    environment_items_value = layout_plan.get("environment")
+    actor_items_value = layout_plan.get("actors")
+    annotation_items_value = layout_plan.get("annotations")
+    geometry_items: list[Any] = geometry_items_value if isinstance(geometry_items_value, list) else []
+    environment_items: list[Any] = environment_items_value if isinstance(environment_items_value, list) else []
+    actor_items: list[Any] = actor_items_value if isinstance(actor_items_value, list) else []
+    annotation_items: list[Any] = annotation_items_value if isinstance(annotation_items_value, list) else []
+
+    path_index: dict[str, dict[str, Any]] = {}
+
+    for items, default_layer in ((geometry_items, 1), (environment_items, 5)):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            kind = str(item.get("kind") or "").strip()
+            if not kind:
+                continue
+            element = _make_grid_element(kind, item, metrics, default_layer=default_layer)
+            scene["elements"].append(element)
+            props_value = element.get("props")
+            props: dict[str, Any] = props_value if isinstance(props_value, dict) else {}
+            path_points_value = props.get("pathPoints")
+            path_points: list[tuple[float, float]] = []
+            if isinstance(path_points_value, list):
+                path_points = [
+                    (float(point[0]), float(point[1]))
+                    for point in path_points_value
+                    if isinstance(point, (tuple, list)) and len(point) >= 2
+                ]
+            if item.get("id") and path_points:
+                path_index[str(item.get("id"))] = {
+                    "element": element,
+                    "points": path_points,
+                }
+
+    for item in actor_items:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").strip()
+        if not kind:
+            continue
+        path_id = str(item.get("pathId") or ((item.get("props") or {}).get("pathId") if isinstance(item.get("props"), dict) else "") or "").strip()
+        if path_id and path_id in path_index:
+            path_record = path_index[path_id]
+            path_points_value = path_record.get("points")
+            path_points: list[tuple[float, float]] = path_points_value if isinstance(path_points_value, list) else []
+            path_element_value = path_record.get("element")
+            path_element: dict[str, Any] = path_element_value if isinstance(path_element_value, dict) else {}
+            x, y, rotation = _sample_grid_actor_on_path(item, path_points, path_element, metrics)
+            scale = _grid_scale(kind, item, metrics)
+            layer = _grid_int(item, "layer", _grid_default_layer(kind, 10), 0)
+            props = dict(item.get("props") or {}) if isinstance(item.get("props"), dict) else {}
+            element = make_element(
+                kind,
+                x=x,
+                y=y,
+                rotation=rotation,
+                scale=scale,
+                color=item.get("color") or None,
+                layer=layer,
+                label=str(item.get("label") or "") or None,
+                props=props,
+            )
+            if item.get("id"):
+                element["id"] = str(item.get("id"))
+            scene["elements"].append(element)
+            continue
+        scene["elements"].append(
+            _make_grid_element(kind, item, metrics, default_layer=10)
+        )
+
+    for item in annotation_items:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").strip()
+        if not kind:
+            continue
+        scene["elements"].append(
+            _make_grid_element(kind, item, metrics, default_layer=20)
+        )
+
+    return normalize_scene(scene)
+
+
 def build_scene_from_layout_plan(
     layout_plan: dict[str, Any],
     prompt: str,
     current_scene: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if _is_grid_layout_plan(layout_plan):
+        return build_scene_from_grid_layout_plan(layout_plan, prompt, current_scene=current_scene)
+
     scene = default_scene() if not current_scene else deep_copy_scene(current_scene)
     layout_value = layout_plan.get("layout")
     layout_info = layout_value if isinstance(layout_value, dict) else {}
@@ -834,6 +1291,29 @@ def build_scene_from_layout_plan(
             continue
         x, y = _resolve_anchor(layout, item, index)
         spec = asset_spec(kind)
+        if kind in _structural_kinds_for_layout(layout):
+            existing = next(
+                (
+                    candidate
+                    for candidate in scene["elements"]
+                    if candidate.get("kind") == kind
+                    and abs(float(candidate.get("x") or 0.0) - x) <= 2.0
+                    and abs(float(candidate.get("y") or 0.0) - y) <= 2.0
+                ),
+                None,
+            )
+            if existing:
+                if item.get("id"):
+                    existing["id"] = str(item["id"])
+                if item.get("label"):
+                    existing["label"] = str(item["label"])
+                if isinstance(item.get("props"), dict):
+                    existing["props"] = {
+                        **dict(existing.get("props") or {}),
+                        **dict(item.get("props") or {}),
+                    }
+                placement_records[existing["id"]] = {"lane": None, "s": None, "kind": kind}
+                continue
         element = make_element(
             kind,
             x=x,
@@ -861,10 +1341,11 @@ def build_scene_from_layout_plan(
         if lane not in lane_paths:
             lane = _default_lane_for_kind(kind, layout)
         s_value = _resolve_progress(item, index)
-        x, y, rotation = _sample_polyline(lane_paths.get(lane, []), s_value)
-        heading = str(item.get("heading") or "forward").strip().lower()
-        if heading in {"reverse", "backward", "opposite"}:
-            rotation = (rotation + 180.0) % 360.0
+        path_override = None
+        if layout == "crosswalk" and kind == "pedestrian":
+            path_override = _crosswalk_pedestrian_path(item)
+        x, y, rotation = _sample_polyline(path_override or lane_paths.get(lane, []), s_value)
+        rotation = _heading_rotation_override(rotation, item.get("heading"))
         element = make_element(
             kind,
             x=x,
@@ -881,7 +1362,15 @@ def build_scene_from_layout_plan(
             element["props"] = dict(item.get("props") or {})
         scene["elements"].append(element)
         placement_records[element["id"]] = {"lane": lane, "s": s_value, "kind": kind}
-        relation = str(item.get("relation") or "").strip()
+        relation_value = item.get("relation")
+        relation = ""
+        if isinstance(relation_value, dict):
+            relation_type = str(relation_value.get("type") or "").strip()
+            relation_target = str(relation_value.get("to") or "").strip()
+            if relation_type and relation_target:
+                relation = f"{relation_type}:{relation_target}"
+        else:
+            relation = str(relation_value or "").strip()
         if relation:
             pending_relations.append((item, element, relation))
 
@@ -924,6 +1413,7 @@ def build_scene_from_layout_plan(
         else:
             continue
         x, y, rotation = _sample_polyline(lane_paths[lane], current_record["s"])
+        rotation = _heading_rotation_override(rotation, item.get("heading"))
         element["x"] = x
         element["y"] = y
         element["rotation"] = rotation

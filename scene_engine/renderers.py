@@ -69,6 +69,26 @@ def render_element(element: dict[str, Any]) -> str:
 
 def render_road(element: dict[str, Any]) -> str:
     props = element.get("props") or {}
+    path_points = props.get("pathPoints") if isinstance(props.get("pathPoints"), list) else []
+    if path_points:
+        coords = [point for point in path_points if isinstance(point, (tuple, list)) and len(point) >= 2]
+        if len(coords) >= 2:
+            width = clamp_number(props.get("width", 180), 80, 420, 180)
+            lane_count = int(clamp_number(props.get("lanes", 2), 1, 6, 2))
+            road_role = str(props.get("roadRole") or "road").strip().lower()
+            base_color = "#5b6474" if road_role in {"arterial", "main", "main_road"} else "#6b7280"
+            path_d = "M " + " L ".join(f"{float(point[0]):.1f} {float(point[1]):.1f}" for point in coords)
+            parts = [
+                f'<path d="{path_d}" fill="none" stroke="{base_color}" stroke-width="{width:.1f}" stroke-linecap="round" stroke-linejoin="round"/>',
+            ]
+            if lane_count >= 2:
+                parts.append(
+                    f'<path d="{path_d}" fill="none" stroke="#f8fafc" stroke-width="6" stroke-dasharray="24 18" stroke-linecap="round" stroke-linejoin="round"/>'
+                )
+            parts.append(
+                f'<path d="{path_d}" fill="none" stroke="#d1d5db" stroke-width="{max(width - 28.0, 12.0):.1f}" stroke-linecap="round" stroke-linejoin="round" opacity="0.08"/>'
+            )
+            return "\n".join(parts)
     length = clamp_number(props.get("length", 920), 180, 1400, 920)
     width = clamp_number(props.get("width", 180), 80, 340, 180)
     lane_count = int(clamp_number(props.get("lanes", 2), 1, 4, 2))
