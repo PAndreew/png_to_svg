@@ -73,6 +73,41 @@ class GridPointModel(BaseModel):
     row: float = 0.0
 
 
+class TopologyRoadModel(BaseModel):
+    id: str
+    roadRole: str | None = None
+    fromJunction: str | None = None
+    toJunction: str | None = None
+    laneCount: int = Field(default=2, ge=1, le=6)
+    widthSegments: float | None = Field(default=None, ge=1.0, le=6.0)
+    points: list[GridPointModel] = Field(default_factory=list)
+    props: dict[str, Any] = Field(default_factory=dict)
+
+
+class TopologyJunctionModel(BaseModel):
+    id: str
+    kind: Literal[
+        "intersection",
+        "t_junction",
+        "merge",
+        "entry",
+        "exit",
+        "roundabout",
+        "crossing",
+        "bend",
+    ] = "intersection"
+    col: float = 0.0
+    row: float = 0.0
+    connectedRoadIds: list[str] = Field(default_factory=list)
+    control: str | None = None
+    props: dict[str, Any] = Field(default_factory=dict)
+
+
+class TopologyPlanModel(BaseModel):
+    roads: list[TopologyRoadModel] = Field(default_factory=list)
+    junctions: list[TopologyJunctionModel] = Field(default_factory=list)
+
+
 class GridPlacementItemModel(BaseModel):
     id: str | None = None
     kind: str
@@ -137,6 +172,7 @@ class LayoutPlanModel(BaseModel):
     title: str | None = None
     warnings: list[str] = Field(default_factory=list)
     map: GridMapModel | None = None
+    topology: TopologyPlanModel | None = None
     geometry: list[GridPlacementItemModel] = Field(default_factory=list)
     environment: list[GridPlacementItemModel] = Field(default_factory=list)
     actors: list[GridPlacementItemModel] = Field(default_factory=list)

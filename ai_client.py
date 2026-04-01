@@ -26,6 +26,31 @@ SCENE_SYSTEM_PROMPT = textwrap.dedent("""
       "warnings": ["optional warning"],
             "layoutPlan": {
                 "map": {"cols": 10, "rows": 10},
+                "topology": {
+                    "roads": [
+                        {
+                            "id": "arterial_main",
+                            "roadRole": "arterial",
+                            "fromJunction": "west_entry",
+                            "toJunction": "east_entry",
+                            "laneCount": 4,
+                            "widthSegments": 3.5,
+                            "points": [{"col": 0, "row": 4}, {"col": 11, "row": 4}],
+                            "props": {}
+                        }
+                    ],
+                    "junctions": [
+                        {
+                            "id": "west_entry",
+                            "kind": "entry",
+                            "col": 0,
+                            "row": 4,
+                            "connectedRoadIds": ["arterial_main"],
+                            "control": null,
+                            "props": {}
+                        }
+                    ]
+                },
                 "geometry": [
                     {
                         "id": "road_main",
@@ -101,7 +126,9 @@ SCENE_SYSTEM_PROMPT = textwrap.dedent("""
     - Keep the scene concise and editable.
     - If an asset is missing, emit kind="placeholder" with a short label.
     - Use `layoutPlan.map.cols` and `layoutPlan.map.rows` between 10 and 15. Pick the smallest size that comfortably fits the scene.
+    - For multi-road scenes, include `layoutPlan.topology` with canonical road ids, road roles, road centerlines, and junction connectivity.
     - Represent the scene as a hybrid segment map: geometry occupies grid rectangles or point-defined road centerlines, actors occupy grid cells/spans or follow a road path.
+    - Keep `layoutPlan.topology.roads[].id` aligned with road ids used in `layoutPlan.geometry` and actor `pathId`.
     - For a complex arterial, staggered junction, or curved connector, use `geometry[].points` to define the road centerline in grid space.
     - `points` are grid coordinates along the road centerline. Use them for arterials, curved roads, side-road connectors, and staggered approaches.
     - Roads and crossings belong in `layoutPlan.geometry`, not `actors`.
@@ -201,7 +228,7 @@ async def call_scene_reviewer(review_payload: dict[str, Any]) -> dict[str, Any]:
                 {{"approved": true, "issues": [], "summary": "..."}}
                 If there are issues, return:
                 {{"approved": false, "issues": ["..."], "layoutPlan": {{... corrected grid layout plan ...}}, "summary": "..."}}
-                Prefer correcting road centerline points, road roles, pathId/s/laneIndex actor placement, grid segments, rotations, and layers.
+                Prefer correcting topology road connectivity, road centerline points, road roles, pathId/s/laneIndex actor placement, grid segments, rotations, and layers.
                 Output JSON only.
 
                 Review payload:

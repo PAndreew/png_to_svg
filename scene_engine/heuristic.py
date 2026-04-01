@@ -694,6 +694,10 @@ def layout_planner_context() -> dict[str, Any]:
                 "notes": "Use either a centered grid rectangle for straight corridors or a path with points for arterials, connectors, and staggered side roads.",
             },
             {
+                "kind": "topology",
+                "notes": "For multi-road scenes, add layoutPlan.topology.roads and layoutPlan.topology.junctions first, then keep geometry consistent with that network.",
+            },
+            {
                 "kind": "crosswalk",
                 "notes": "Overlay on top of road geometry. Use layer 2 and span the full road width at the crossing point.",
             },
@@ -722,7 +726,9 @@ def layout_planner_context() -> dict[str, Any]:
         "placementRules": [
             "Choose map size between 10x10 and 15x15 based on scene complexity.",
             "Use geometry rectangles instead of semantic lane names whenever possible.",
+            "For non-trivial road networks, include layoutPlan.topology with road ids, centerlines, road roles, and junction connectivity.",
             "For complex road networks, keep the same schema but describe roads as geometry items with points.",
+            "Topology road ids should match the geometry road ids so actors can use pathId consistently.",
             "When geometry uses points, the points describe the road centerline in grid space and the renderer will build a simple spline-like road ribbon from them.",
             "Use numeric rotation degrees for placed assets.",
             "Cars usually occupy 2x1 segments, trucks and buses 3x1, pedestrians 1x1.",
@@ -730,6 +736,107 @@ def layout_planner_context() -> dict[str, Any]:
             "Actors may either use direct grid placement or path-following with pathId and s from 0.0 to 1.0.",
         ],
     }
+
+
+def _topology_layer_for_role(role: str) -> int:
+    role_key = str(role or "road").strip().lower()
+    if role_key in {"arterial", "main", "main_road", "highway", "primary"}:
+        return 1
+    return 2
+
+
+def _topology_width_segments(road: dict[str, Any]) -> float:
+    width_segments = _grid_float(road, "widthSegments", 0.0)
+    if width_segments > 0.0:
+        return width_segments
+    lane_count = _grid_int(road, "laneCount", 2, 1)
+    return max(1.8, min(5.0, 1.2 + lane_count * 0.55))
+
+
+def _topology_to_hybrid_plan(layout_plan: dict[str, Any]) -> dict[str, Any]:
+    topology_value = layout_plan.get("topology")
+    topology = topology_value if isinstance(topology_value, dict) else {}
+    roads_value = topology.get("roads")
+    junctions_value = topology.get("junctions")
+    roads: list[Any] = roads_value if isinstance(roads_value, list) else []
+    junctions: list[Any] = junctions_value if isinstance(junctions_value, list) else []
+    if not roads and not junctions:
+        return layout_plan
+
+    merged_plan = dict(layout_plan)
+    geometry = list(merged_plan.get("geometry") or []) if isinstance(merged_plan.get("geometry"), list) else []
+    environment = list(merged_plan.get("environment") or []) if isinstance(merged_plan.get("environment"), list) else []
+    geometry_ids = {str(item.get("id")) for item in geometry if isinstance(item, dict) and item.get("id")}
+    environment_ids = {str(item.get("id")) for item in environment if isinstance(item, dict) and item.get("id")}
+
+    for road in roads:
+        if not isinstance(road, dict):
+            continue
+        road_id = str(road.get("id") or "").strip()
+        if not road_id or road_id in geometry_ids:
+            continue
+        points_value = road.get("points")
+        points = points_value if isinstance(points_value, list) else []
+        if len(points) < 2:
+            continue
+        road_role = str(road.get("roadRole") or ((road.get("props") or {}).get("roadRole") if isinstance(road.get("props"), dict) else "") or "road").strip().lower()
+        lane_count = _grid_int(road, "laneCount", 2, 1)
+        width_segments = _topology_width_segments(road)
+        road_props = dict(road.get("props") or {}) if isinstance(road.get("props"), dict) else {}
+        geometry.append(
+            {
+                "id": road_id,
+                "kind": "road",
+                "points": points,
+                "laneCount": lane_count,
+                "rowSpan": max(2, int(round(width_segments))),
+                "layer": _topology_layer_for_role(road_role),
+                "props": {
+                    **road_props,
+                    "roadRole": road_role,
+                    "laneCount": lane_count,
+                    "widthSegments": width_segments,
+                    "fromJunction": road.get("fromJunction"),
+                    "toJunction": road.get("toJunction"),
+                    "topologyRoad": True,
+                },
+            }
+        )
+        geometry_ids.add(road_id)
+
+    for junction in junctions:
+        if not isinstance(junction, dict):
+            continue
+        junction_id = str(junction.get("id") or "").strip()
+        if not junction_id:
+            continue
+        control = str(junction.get("control") or "").strip().lower()
+        if control not in {"signal", "traffic_light", "traffic signal"}:
+            continue
+        signal_id = f"{junction_id}_signal"
+        if signal_id in environment_ids:
+            continue
+        environment.append(
+            {
+                "id": signal_id,
+                "kind": "traffic_light",
+                "col": int(round(float(junction.get("col", 0.0)))),
+                "row": max(0, int(round(float(junction.get("row", 0.0)))) - 1),
+                "colSpan": 1,
+                "rowSpan": 1,
+                "layer": 4,
+                "props": {
+                    "junctionId": junction_id,
+                    "connectedRoadIds": list(junction.get("connectedRoadIds") or []),
+                    **(dict(junction.get("props") or {}) if isinstance(junction.get("props"), dict) else {}),
+                },
+            }
+        )
+        environment_ids.add(signal_id)
+
+    merged_plan["geometry"] = geometry
+    merged_plan["environment"] = environment
+    return merged_plan
 
 
 def _sample_polyline(
@@ -1156,6 +1263,7 @@ def build_scene_from_grid_layout_plan(
     prompt: str,
     current_scene: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    layout_plan = _topology_to_hybrid_plan(layout_plan)
     scene = default_scene() if not current_scene else deep_copy_scene(current_scene)
     scene["elements"] = []
     scene["title"] = str(layout_plan.get("title") or build_title(prompt))
@@ -1208,7 +1316,13 @@ def build_scene_from_grid_layout_plan(
         kind = str(item.get("kind") or "").strip()
         if not kind:
             continue
-        path_id = str(item.get("pathId") or ((item.get("props") or {}).get("pathId") if isinstance(item.get("props"), dict) else "") or "").strip()
+        path_id = str(
+            item.get("pathId")
+            or ((item.get("props") or {}).get("pathId") if isinstance(item.get("props"), dict) else "")
+            or ((item.get("props") or {}).get("roadId") if isinstance(item.get("props"), dict) else "")
+            or ((item.get("props") or {}).get("topologyRoadId") if isinstance(item.get("props"), dict) else "")
+            or ""
+        ).strip()
         if path_id and path_id in path_index:
             path_record = path_index[path_id]
             path_points_value = path_record.get("points")

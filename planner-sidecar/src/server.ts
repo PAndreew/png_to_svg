@@ -49,6 +49,14 @@ Required output shape:
   "warnings": [],
   "layoutPlan": {
     "map": { "cols": 10, "rows": 10 },
+    "topology": {
+      "roads": [
+        {"id": "arterial_main", "roadRole": "arterial", "fromJunction": "west_entry", "toJunction": "east_entry", "laneCount": 4, "widthSegments": 3.5, "points": [{"col": 0, "row": 4}, {"col": 11, "row": 4}], "props": {}}
+      ],
+      "junctions": [
+        {"id": "west_entry", "kind": "entry", "col": 0, "row": 4, "connectedRoadIds": ["arterial_main"], "control": null, "props": {}}
+      ]
+    },
     "geometry": [
       {"id": "arterial_main", "kind": "road", "points": [{"col": 0, "row": 4}, {"col": 11, "row": 4}], "rowSpan": 4, "laneCount": 4, "layer": 1, "props": {"roadRole": "arterial"}},
       {"id": "crosswalk1", "kind": "crosswalk", "col": 5, "row": 3, "colSpan": 1, "rowSpan": 4, "layer": 3}
@@ -65,8 +73,10 @@ Rules:
 - Use only assets that exist in the catalog or placeholders.
 - Choose map size between 10x10 and 15x15 based on scene complexity.
 - First solve only geometry and controls. Leave actors empty in this phase.
+- For any non-trivial network, include layoutPlan.topology with canonical road ids and junction connectivity before refining geometry.
 - Use geometry rectangles for simple roads and use geometry points for arterials, connectors, curves, and staggered side roads.
 - A road geometry item may include points, laneCount, rowSpan, and props.roadRole.
+- Keep topology road ids aligned with geometry road ids.
 - Use layer bands: arterial/base roads 1, connector roads 2, markings/crosswalks 3, controls 4, environment 5.
 - For a non-signalized staggered intersection, prefer one arterial road path and separate side-road connector paths with different ids.
 - If a prompt term is misspelled, use the search_assets tool and resolve it to the closest valid asset.
@@ -81,6 +91,7 @@ Return the same scene schema, but now add actors and optional annotations using 
 
 Rules:
 - Keep layoutPlan.map and layoutPlan.geometry from the geometry draft whenever possible.
+- Preserve layoutPlan.topology and use its road ids as the canonical ids for actor pathId.
 - Place moving actors with either direct grid placement or path-following using pathId + s + laneIndex.
 - When a vehicle belongs on a road, prefer pathId + s + laneIndex over vague language.
 - Cars usually occupy 2x1 segments, trucks and buses 3x1, pedestrians 1x1.
@@ -103,6 +114,7 @@ Focus on mistakes such as:
 - vehicle placed in the wrong grid segment or with the wrong rotation
 - vehicle attached to the wrong road path or wrong progress along the path
 - arterial road missing, broken, or incorrectly represented in the geometry phase
+- topology road graph missing connector roads, minor-road branches, or junction connectivity implied by the prompt
 - traffic lights or static assets attached to poor grid segments
 - scene too cluttered or semantically inconsistent
 
@@ -124,7 +136,7 @@ If changes are needed, return:
 
 Do not output prose outside JSON.
 Do not output pixel coordinates unless unavoidable.
-Prefer correcting map size, geometry points, road roles, object pathId/s/laneIndex, grid segments, spans, rotation, and layers.`;
+Prefer correcting topology connectivity, map size, geometry points, road roles, object pathId/s/laneIndex, grid segments, spans, rotation, and layers.`;
 
 const searchAssetsSchema = Type.Object({
   query: Type.String({ description: "Asset name, typo, or concept to search for" }),
@@ -254,6 +266,193 @@ function extractJsonObject(text: string): Record<string, unknown> {
   return JSON.parse(match[0]) as Record<string, unknown>;
 }
 
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asArray(value: unknown): unknown[] | null {
+  return Array.isArray(value) ? value : null;
+}
+
+function hasOnlyHybridCollections(value: Record<string, unknown>): boolean {
+  return ["topology", "geometry", "environment", "actors", "annotations"].some((key) => key in value);
+}
+
+function validateTopologyPlan(
+  value: unknown,
+): { ok: true; normalized: Record<string, unknown> } | { ok: false; error: string } {
+  const topology = asObject(value);
+  if (!topology) {
+    return { ok: false, error: "layoutPlan.topology must be a JSON object when provided." };
+  }
+  const roads = asArray(topology.roads);
+  const junctions = asArray(topology.junctions);
+  if (!roads || !junctions) {
+    return { ok: false, error: "layoutPlan.topology must contain roads and junctions arrays." };
+  }
+  for (const road of roads) {
+    const roadObject = asObject(road);
+    if (!roadObject) {
+      return { ok: false, error: "Each topology road must be a JSON object." };
+    }
+    if (!String(roadObject.id ?? "").trim()) {
+      return { ok: false, error: "Each topology road must include a non-empty id." };
+    }
+    const points = asArray(roadObject.points);
+    if (!points || points.length < 2) {
+      return { ok: false, error: `Topology road ${String(roadObject.id ?? "")} must include at least two points.` };
+    }
+  }
+  for (const junction of junctions) {
+    const junctionObject = asObject(junction);
+    if (!junctionObject) {
+      return { ok: false, error: "Each topology junction must be a JSON object." };
+    }
+    if (!String(junctionObject.id ?? "").trim()) {
+      return { ok: false, error: "Each topology junction must include a non-empty id." };
+    }
+  }
+  return {
+    ok: true,
+    normalized: {
+      roads,
+      junctions,
+    },
+  };
+}
+
+function validateHybridLayoutPlan(
+  value: unknown,
+  phase: "geometry" | "objects" | "review",
+): { ok: true; normalized: Record<string, unknown> } | { ok: false; error: string } {
+  const plan = asObject(value);
+  if (!plan) {
+    return { ok: false, error: "layoutPlan must be a JSON object." };
+  }
+
+  if ("elements" in plan) {
+    return {
+      ok: false,
+      error: "Do not use layoutPlan.elements. Use layoutPlan.geometry, layoutPlan.environment, layoutPlan.actors, and layoutPlan.annotations.",
+    };
+  }
+
+  const mapValue = asObject(plan.map);
+  if (!mapValue) {
+    return { ok: false, error: "layoutPlan.map must be present with cols and rows." };
+  }
+
+  const cols = Number(mapValue.cols);
+  const rows = Number(mapValue.rows);
+  if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols < 10 || cols > 15 || rows < 10 || rows > 15) {
+    return { ok: false, error: "layoutPlan.map.cols and layoutPlan.map.rows must be numbers between 10 and 15." };
+  }
+
+  const geometry = asArray(plan.geometry);
+  const environment = asArray(plan.environment);
+  const actors = asArray(plan.actors);
+  const annotations = asArray(plan.annotations);
+  if (!geometry || !environment || !actors || !annotations) {
+    return {
+      ok: false,
+      error: "layoutPlan must contain geometry, environment, actors, and annotations arrays, even if some are empty.",
+    };
+  }
+
+  const topologyValue = plan.topology;
+  let topology: Record<string, unknown> | undefined;
+  if (topologyValue !== undefined) {
+    const topologyValidation = validateTopologyPlan(topologyValue);
+    if (!topologyValidation.ok) {
+      return { ok: false, error: topologyValidation.error };
+    }
+    topology = topologyValidation.normalized;
+  }
+
+  if (phase === "geometry" && actors.length > 0) {
+    return { ok: false, error: "Geometry phase must leave layoutPlan.actors empty." };
+  }
+
+  if (geometry.length === 0 && (!topology || !Array.isArray(topology.roads) || topology.roads.length === 0)) {
+    return { ok: false, error: "layoutPlan.geometry must contain at least one road item, or layoutPlan.topology.roads must describe the road network." };
+  }
+
+  return {
+    ok: true,
+    normalized: {
+      ...plan,
+      map: { cols, rows },
+      ...(topology ? { topology } : {}),
+      geometry,
+      environment,
+      actors,
+      annotations,
+    },
+  };
+}
+
+function validatePhaseSceneEnvelope(
+  rawJson: Record<string, unknown>,
+  phase: "geometry" | "objects",
+): { ok: true; normalized: Record<string, unknown> } | { ok: false; error: string } {
+  const wrappedPlan = asObject(rawJson.layoutPlan);
+  if (!wrappedPlan) {
+    if (hasOnlyHybridCollections(rawJson)) {
+      return {
+        ok: false,
+        error: "Return a full scene object with the hybrid plan nested under layoutPlan. Do not place map/geometry/environment/actors at the top level.",
+      };
+    }
+    return { ok: false, error: "Response must contain layoutPlan." };
+  }
+
+  const validatedPlan = validateHybridLayoutPlan(wrappedPlan, phase);
+  if (!validatedPlan.ok) {
+    return { ok: false, error: validatedPlan.error };
+  }
+
+  return {
+    ok: true,
+    normalized: {
+      version: String(rawJson.version ?? "odd.scene.v1"),
+      title: String(rawJson.title ?? "ODD pictogram"),
+      prompt: String(rawJson.prompt ?? ""),
+      warnings: Array.isArray(rawJson.warnings) ? rawJson.warnings : [],
+      layoutPlan: validatedPlan.normalized,
+    },
+  };
+}
+
+function validateReviewPayload(
+  rawJson: Record<string, unknown>,
+): { ok: true; normalized: Record<string, unknown> } | { ok: false; error: string } {
+  const approved = Boolean(rawJson.approved ?? true);
+  const issues = Array.isArray(rawJson.issues) ? rawJson.issues : [];
+  const summary = String(rawJson.summary ?? "");
+  if (approved) {
+    return { ok: true, normalized: { approved: true, issues, summary } };
+  }
+  const layoutPlanValue = asObject(rawJson.layoutPlan);
+  if (!layoutPlanValue) {
+    return { ok: false, error: "When approved is false, review output must include layoutPlan." };
+  }
+  const validatedPlan = validateHybridLayoutPlan(layoutPlanValue, "review");
+  if (!validatedPlan.ok) {
+    return { ok: false, error: validatedPlan.error };
+  }
+  return {
+    ok: true,
+    normalized: {
+      approved: false,
+      issues,
+      summary,
+      layoutPlan: validatedPlan.normalized,
+    },
+  };
+}
+
 function summarizeResult(result: Json): string {
   const text = JSON.stringify(result);
   return text.length > 240 ? `${text.slice(0, 240)}...` : text;
@@ -326,6 +525,7 @@ async function runPlanningPhase(
     { role: "system", content: systemPrompt },
     { role: "user", content: JSON.stringify(userPayload) },
   ];
+  let validationRetries = 0;
 
   for (let turn = 0; turn < 8; turn += 1) {
     const data = await callOpenRouter(messages);
@@ -365,9 +565,22 @@ async function runPlanningPhase(
         ? message.content.map((item: any) => item?.text ?? "").join("\n")
         : "";
     const rawJson = extractJsonObject(content);
+    const phaseValidation = validatePhaseSceneEnvelope(rawJson, phase === "geometry" ? "geometry" : "objects");
+    if (!phaseValidation.ok) {
+      validationRetries += 1;
+      if (validationRetries >= 3) {
+        throw new Error(`${phase} planner phase produced invalid schema after retries: ${phaseValidation.error}`);
+      }
+      messages.push({ role: "assistant", content });
+      messages.push({
+        role: "user",
+        content: `Schema validation error: ${phaseValidation.error}\nRegenerate the full JSON now. Keep all valid intent, but strictly follow the required schema and return JSON only.`,
+      });
+      continue;
+    }
     return {
       raw_text: content,
-      raw_json: rawJson,
+      raw_json: phaseValidation.normalized,
       tool_trace: toolTrace,
     };
   }
@@ -433,17 +646,29 @@ async function reviewScene(request: Record<string, unknown>) {
     { role: "system", content: REVIEW_SYSTEM_PROMPT },
     { role: "user", content },
   ];
-  const data = await callReviewModel(messages);
-  const message = data.choices?.[0]?.message ?? {};
-  const body = typeof message.content === "string"
-    ? message.content
-    : Array.isArray(message.content)
-      ? message.content.map((item: any) => item?.text ?? "").join("\n")
-      : "";
-  return {
-    raw_text: body,
-    raw_json: extractJsonObject(body),
-  };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const data = await callReviewModel(messages);
+    const message = data.choices?.[0]?.message ?? {};
+    const body = typeof message.content === "string"
+      ? message.content
+      : Array.isArray(message.content)
+        ? message.content.map((item: any) => item?.text ?? "").join("\n")
+        : "";
+    const rawJson = extractJsonObject(body);
+    const validation = validateReviewPayload(rawJson);
+    if (validation.ok) {
+      return {
+        raw_text: body,
+        raw_json: validation.normalized,
+      };
+    }
+    messages.push({ role: "assistant", content: body });
+    messages.push({
+      role: "user",
+      content: `Schema validation error: ${validation.error}\nRegenerate the review JSON now. Keep the same review intent, but return valid JSON in the required schema only.`,
+    });
+  }
+  throw new Error("Reviewer produced invalid schema after retries");
 }
 
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {

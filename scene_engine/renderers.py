@@ -76,7 +76,17 @@ def render_road(element: dict[str, Any]) -> str:
             width = clamp_number(props.get("width", 180), 80, 420, 180)
             lane_count = int(clamp_number(props.get("lanes", 2), 1, 6, 2))
             road_role = str(props.get("roadRole") or "road").strip().lower()
-            base_color = "#5b6474" if road_role in {"arterial", "main", "main_road"} else "#6b7280"
+            base_color = {
+                "arterial": "#4b5563",
+                "main": "#4b5563",
+                "main_road": "#4b5563",
+                "primary": "#4b5563",
+                "highway": "#374151",
+                "connector": "#6b7280",
+                "minor": "#7c8596",
+                "local": "#8992a3",
+                "service": "#9aa3b2",
+            }.get(road_role, "#6b7280")
             path_d = "M " + " L ".join(f"{float(point[0]):.1f} {float(point[1]):.1f}" for point in coords)
             parts = [
                 f'<path d="{path_d}" fill="none" stroke="{base_color}" stroke-width="{width:.1f}" stroke-linecap="round" stroke-linejoin="round"/>',
