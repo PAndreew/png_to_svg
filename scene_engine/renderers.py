@@ -34,28 +34,34 @@ def render_scene_svg(scene: dict[str, Any]) -> str:
 
 
 def render_element(element: dict[str, Any]) -> str:
-    asset_definition = _asset_definition(element["kind"])
-    if asset_definition and asset_definition.get("svgMarkup"):
-        inner = str(asset_definition["svgMarkup"])
-    else:
-        renderer = {
-            "road": render_road,
-            "intersection": render_intersection,
-            "t_junction": render_t_junction,
-            "roundabout": render_roundabout,
-            "crosswalk": render_crosswalk,
-            "car": render_car,
-            "truck": render_truck,
-            "bus": render_bus,
-            "pedestrian": render_pedestrian,
-            "bicycle": render_bicycle,
-            "traffic_light": render_traffic_light,
-            "tree": render_tree,
-            "arrow": render_arrow,
-            "placeholder": render_placeholder,
-        }.get(element["kind"], render_placeholder)
-
+    # Built-in renderers take priority so dynamic logic (e.g. pathPoints for
+    # curved roads) is never silently replaced by a static catalog svgMarkup.
+    # The dict is built inline so name resolution happens at call time, not at
+    # module load time (all renderer functions are defined further below).
+    renderer = {
+        "road": render_road,
+        "intersection": render_intersection,
+        "t_junction": render_t_junction,
+        "roundabout": render_roundabout,
+        "crosswalk": render_crosswalk,
+        "car": render_car,
+        "truck": render_truck,
+        "bus": render_bus,
+        "pedestrian": render_pedestrian,
+        "bicycle": render_bicycle,
+        "traffic_light": render_traffic_light,
+        "tree": render_tree,
+        "arrow": render_arrow,
+        "placeholder": render_placeholder,
+    }.get(element["kind"])
+    if renderer:
         inner = renderer(element)
+    else:
+        asset_definition = _asset_definition(element["kind"])
+        if asset_definition and asset_definition.get("svgMarkup"):
+            inner = str(asset_definition["svgMarkup"])
+        else:
+            inner = render_placeholder(element)
     attrs = {
         "class": "scene-asset",
         "data-scene-id": element["id"],

@@ -7,65 +7,6 @@ import re
 import xml.etree.ElementTree as ET
 
 
-def _builtin_road_svg_markup() -> str:
-    return "\n".join(
-        [
-            '<rect x="-460.0" y="-90.0" width="920.0" height="180.0" rx="28" fill="#6b7280"/>',
-            '<line x1="-436.0" y1="0" x2="436.0" y2="0" stroke="#f8fafc" stroke-width="6" stroke-dasharray="24 18" stroke-linecap="round"/>',
-            '<line x1="-440.0" y1="-76.0" x2="440.0" y2="-76.0" stroke="#d1d5db" stroke-width="3" opacity="0.55"/>',
-            '<line x1="-440.0" y1="76.0" x2="440.0" y2="76.0" stroke="#d1d5db" stroke-width="3" opacity="0.55"/>',
-        ]
-    )
-
-
-def _builtin_intersection_svg_markup() -> str:
-    return "\n".join(
-        [
-            '<rect x="-420" y="-92" width="840" height="184" rx="28" fill="#6b7280"/>',
-            '<rect x="-92" y="-320" width="184" height="640" rx="28" fill="#6b7280"/>',
-            '<line x1="-390" y1="0" x2="390" y2="0" stroke="#f8fafc" stroke-width="6" stroke-dasharray="24 18" stroke-linecap="round"/>',
-            '<line x1="0" y1="-290" x2="0" y2="290" stroke="#f8fafc" stroke-width="6" stroke-dasharray="24 18" stroke-linecap="round"/>',
-        ]
-    )
-
-
-def _builtin_t_junction_svg_markup() -> str:
-    return "\n".join(
-        [
-            '<rect x="-420" y="-92" width="840" height="184" rx="28" fill="#6b7280"/>',
-            '<rect x="146" y="-320" width="184" height="320" rx="28" fill="#6b7280"/>',
-            '<line x1="-390" y1="0" x2="120" y2="0" stroke="#f8fafc" stroke-width="6" stroke-dasharray="24 18" stroke-linecap="round"/>',
-            '<line x1="238" y1="-290" x2="238" y2="-30" stroke="#f8fafc" stroke-width="6" stroke-dasharray="24 18" stroke-linecap="round"/>',
-        ]
-    )
-
-
-def _builtin_roundabout_svg_markup() -> str:
-    return "\n".join(
-        [
-            '<circle cx="0" cy="0" r="170" fill="#6b7280"/>',
-            '<circle cx="0" cy="0" r="78" fill="#f8fafc"/>',
-            '<circle cx="0" cy="0" r="42" fill="#86efac" stroke="#16a34a" stroke-width="8"/>',
-            '<rect x="-420" y="-46" width="220" height="92" rx="26" fill="#6b7280"/>',
-            '<rect x="200" y="-46" width="220" height="92" rx="26" fill="#6b7280"/>',
-            '<rect x="-46" y="-320" width="92" height="170" rx="26" fill="#6b7280"/>',
-            '<rect x="-46" y="150" width="92" height="170" rx="26" fill="#6b7280"/>',
-        ]
-    )
-
-
-def _builtin_crosswalk_svg_markup() -> str:
-    return "\n".join(
-        [
-            '<rect x="-60.0" y="-90.0" width="12.5" height="180.0" fill="#f8fafc" opacity="0.96"/>',
-            '<rect x="-40.0" y="-90.0" width="12.5" height="180.0" fill="#f8fafc" opacity="0.96"/>',
-            '<rect x="-20.0" y="-90.0" width="12.5" height="180.0" fill="#f8fafc" opacity="0.96"/>',
-            '<rect x="0.0" y="-90.0" width="12.5" height="180.0" fill="#f8fafc" opacity="0.96"/>',
-            '<rect x="20.0" y="-90.0" width="12.5" height="180.0" fill="#f8fafc" opacity="0.96"/>',
-            '<rect x="40.0" y="-90.0" width="12.5" height="180.0" fill="#f8fafc" opacity="0.96"/>',
-        ]
-    )
-
 ASSET_CATALOG: list[dict[str, Any]] = [
     {"kind": "car", "label": "Car", "category": "vehicles", "description": "Compact passenger vehicle, top-down pictogram.", "defaultColor": "#2563eb"},
     {"kind": "truck", "label": "Truck", "category": "vehicles", "description": "Box truck / heavy vehicle, top-down pictogram.", "defaultColor": "#f97316"},
@@ -75,11 +16,11 @@ ASSET_CATALOG: list[dict[str, Any]] = [
     {"kind": "traffic_light", "label": "Traffic Light", "category": "infrastructure", "description": "Traffic signal pole with red/yellow/green lights.", "defaultColor": "#111827"},
     {"kind": "tree", "label": "Tree", "category": "environment", "description": "Simple roadside tree.", "defaultColor": "#16a34a"},
     {"kind": "arrow", "label": "Arrow", "category": "annotations", "description": "Movement arrow, straight or turning.", "defaultColor": "#22c55e"},
-    {"kind": "crosswalk", "label": "Crosswalk", "category": "roads", "description": "Zebra crossing marking.", "defaultColor": "#ffffff", "svgMarkup": _builtin_crosswalk_svg_markup()},
-    {"kind": "road", "label": "Road", "category": "roads", "description": "Straight road segment.", "defaultColor": "#6b7280", "svgMarkup": _builtin_road_svg_markup()},
-    {"kind": "intersection", "label": "Intersection", "category": "roads", "description": "Four-way intersection.", "defaultColor": "#6b7280", "svgMarkup": _builtin_intersection_svg_markup()},
-    {"kind": "t_junction", "label": "T-Junction", "category": "roads", "description": "T-junction road layout.", "defaultColor": "#6b7280", "svgMarkup": _builtin_t_junction_svg_markup()},
-    {"kind": "roundabout", "label": "Roundabout", "category": "roads", "description": "Roundabout road layout.", "defaultColor": "#6b7280", "svgMarkup": _builtin_roundabout_svg_markup()},
+    {"kind": "crosswalk", "label": "Crosswalk", "category": "roads", "description": "Zebra crossing marking.", "defaultColor": "#ffffff"},
+    {"kind": "road", "label": "Road", "category": "roads", "description": "Straight road segment.", "defaultColor": "#6b7280"},
+    {"kind": "intersection", "label": "Intersection", "category": "roads", "description": "Four-way intersection.", "defaultColor": "#6b7280"},
+    {"kind": "t_junction", "label": "T-Junction", "category": "roads", "description": "T-junction road layout.", "defaultColor": "#6b7280"},
+    {"kind": "roundabout", "label": "Roundabout", "category": "roads", "description": "Roundabout road layout.", "defaultColor": "#6b7280"},
 ]
 
 ASSET_SPECS: dict[str, dict[str, Any]] = {
