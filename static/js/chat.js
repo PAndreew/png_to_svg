@@ -49,13 +49,26 @@ function updatePlannerTrace(data) {
   const rawText = data.plannerRawText;
   const layoutPlan = data.plannerLayoutPlan;
   const assetResolution = data.plannerAssetResolution;
+  const toolTrace = data.plannerToolTrace;
+  const firstPassScene = data.firstPassScene;
+  const reviewRawJson = data.reviewRawJson;
+  const reviewRawText = data.reviewRawText;
+  const reviewApplied = data.reviewApplied;
+  const reviewSummary = data.reviewSummary;
+  const stageLog = data.stageLog;
   const beforeLayout = data.sceneBeforeLayout;
   const finalScene = data.scene;
   const parts = [
     `<div class="trace-row"><strong>Planner:</strong> ${planner}</div>`,
     `<div class="trace-row"><strong>Fallback:</strong> ${data.fallbackUsed ? 'yes' : 'no'}</div>`,
     `<div class="trace-row"><strong>Symbolic layout plan:</strong> ${data.plannerUsedLayoutPlan ? 'yes' : 'no'}</div>`,
+    `<div class="trace-row"><strong>Review applied:</strong> ${reviewApplied ? 'yes' : 'no'}</div>`,
   ];
+
+  if (stageLog?.length) {
+    parts.push('<div class="trace-label">Generation stages</div>');
+    parts.push(`<pre class="trace-pre">${escapeHtml(formatJsonBlock(stageLog))}</pre>`);
+  }
 
   if (layoutPlan) {
     parts.push('<div class="trace-label">Symbolic layout plan</div>');
@@ -65,6 +78,11 @@ function updatePlannerTrace(data) {
   if (assetResolution) {
     parts.push('<div class="trace-label">Asset resolution</div>');
     parts.push(`<pre class="trace-pre">${escapeHtml(formatJsonBlock(assetResolution))}</pre>`);
+  }
+
+  if (toolTrace && toolTrace.length) {
+    parts.push('<div class="trace-label">Planner tool trace</div>');
+    parts.push(`<pre class="trace-pre">${escapeHtml(formatJsonBlock(toolTrace))}</pre>`);
   }
 
   if (rawScene) {
@@ -80,6 +98,23 @@ function updatePlannerTrace(data) {
   if (beforeLayout) {
     parts.push('<div class="trace-label">Scene before layout solver</div>');
     parts.push(`<pre class="trace-pre">${escapeHtml(formatJsonBlock(beforeLayout))}</pre>`);
+  }
+
+  if (firstPassScene) {
+    parts.push('<div class="trace-label">First pass scene</div>');
+    parts.push(`<pre class="trace-pre">${escapeHtml(formatJsonBlock(firstPassScene))}</pre>`);
+  }
+
+  if (reviewRawJson) {
+    parts.push('<div class="trace-label">Review result</div>');
+    parts.push(`<pre class="trace-pre">${escapeHtml(formatJsonBlock(reviewRawJson))}</pre>`);
+  } else if (reviewRawText) {
+    parts.push('<div class="trace-label">Review raw text</div>');
+    parts.push(`<pre class="trace-pre">${escapeHtml(String(reviewRawText))}</pre>`);
+  }
+
+  if (reviewSummary) {
+    parts.push(`<div class="trace-row"><strong>Review summary:</strong> ${escapeHtml(reviewSummary)}</div>`);
   }
 
   if (finalScene) {
@@ -136,6 +171,18 @@ export function appendSpinner(text) {
   return wrapper;
 }
 
+function startGenerationStageSpinner(spinner) {
+  const stages = ['fetching assets', 'generating first pass', 'reviewing', 'final render'];
+  let index = 0;
+  spinner.querySelector('.spinner').textContent = stages[index];
+  const interval = window.setInterval(() => {
+    index = Math.min(index + 1, stages.length - 1);
+    const target = spinner.querySelector('.spinner');
+    if (target) target.textContent = stages[index];
+  }, 1800);
+  return () => window.clearInterval(interval);
+}
+
 export async function sendPrompt() {
   const prompt = dom.promptInput.value.trim();
   if (!prompt || state.isGenerating) return;
@@ -144,7 +191,8 @@ export async function sendPrompt() {
   dom.promptInput.value = '';
   dom.promptInput.style.height = 'auto';
   appendMessage('user', prompt);
-  const spinner = appendSpinner('Generating structured scene...');
+  const spinner = appendSpinner('fetching assets');
+  const stopStageSpinner = startGenerationStageSpinner(spinner);
   try {
     const response = await fetch('/api/generate', {
       method: 'POST',
@@ -158,6 +206,7 @@ export async function sendPrompt() {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || response.statusText);
+    stopStageSpinner();
     spinner.remove();
     if (data.scene) state.currentScene = data.scene;
     updatePlannerTrace(data);
@@ -168,11 +217,14 @@ export async function sendPrompt() {
       { text: `planner: ${data.planner}` },
       { text: data.mode === 'fallback-image' ? 'image fallback' : 'structured render', warning: data.mode === 'fallback-image' },
     ];
+    if (data.reviewApplied) chips.push({ text: 'review revised pass' });
+    else if (data.reviewRawJson || data.reviewRawText) chips.push({ text: 'review completed' });
     (data.warnings || []).slice(0, 2).forEach((warning) => chips.push({ text: warning, warning: true }));
     appendMessage('assistant', data.summary || 'Scene rendered on canvas.', chips);
     state.svgFilename = `${(prompt.slice(0, 32).replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'pictogram')}.svg`;
     showToast(data.mode === 'fallback-image' ? 'Fallback render applied' : 'Scene rendered on canvas');
   } catch (error) {
+    stopStageSpinner();
     spinner.remove();
     updatePlannerTrace(null);
     appendMessage('assistant', `Error: ${error.message}`);

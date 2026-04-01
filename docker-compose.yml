@@ -1,0 +1,27 @@
+services:
+  planner:
+    build:
+      context: ./planner-sidecar
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_TEXT_MODEL: ${TEXT_MODEL:-openai/gpt-4.1-mini}
+      OPENROUTER_REVIEW_MODEL: ${REVIEW_MODEL:-google/gemini-2.5-pro}
+    ports:
+      - "8787:8787"
+
+  app:
+    build:
+      context: .
+    depends_on:
+      - planner
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      TEXT_MODEL: ${TEXT_MODEL:-openai/gpt-4.1-mini}
+      IMAGE_MODEL: ${IMAGE_MODEL:-black-forest-labs/flux-schnell}
+      REVIEW_MODEL: ${REVIEW_MODEL:-google/gemini-2.5-pro}
+      ENABLE_INTERNAL_REVIEW: ${ENABLE_INTERNAL_REVIEW:-1}
+      PLANNER_BACKEND: sidecar
+      PI_AGENT_URL: http://planner:8787/plan
+      PI_AGENT_REVIEW_URL: http://planner:8787/review
+    ports:
+      - "8001:8001"

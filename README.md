@@ -83,3 +83,71 @@ Shapes with holes use `fill-rule="evenodd"` so inner contours are automatically 
 - **`--simplify`**: lower values preserve fidelity, higher values give smoother, simpler shapes.
 - **`--max-size`**: reduce for faster results on large photos (the SVG viewport matches the processing resolution).
 - Use **`--backend vtracer`** when you want smooth spline curves instead of polylines.
+
+## Pictogram Studio web app
+
+This repository now also contains the Pictogram Studio web app:
+
+- Python/FastAPI app serving the editor and renderer
+- symbolic scene planner in Python
+- Dockerized TypeScript planner sidecar for asset-aware scene planning
+
+### Planner architecture
+
+The planning flow is now:
+
+1. user prompt enters the FastAPI app
+2. Python builds asset-registry context from the catalog
+3. Python calls the TypeScript planner sidecar
+4. the sidecar uses tool-style asset search against the catalog payload
+5. the sidecar returns a symbolic `layoutPlan`
+6. Python converts lane/slot/anchor placement into a first-pass scene
+7. the first pass is rendered to SVG and rasterized to PNG
+8. the PNG plus JSON are sent to the multimodal review pass
+9. if needed, the review pass rewrites the symbolic JSON
+10. Python renders the final reviewed scene
+
+### Internal review loop
+
+The app can run an internal second-pass review before returning a scene to the user.
+
+User-visible generation stages:
+
+- `fetching assets`
+- `generating first pass`
+- `reviewing`
+- `final render`
+
+The review pass uses:
+
+- first-pass symbolic scene JSON
+- first-pass rendered PNG
+- the original prompt
+
+If the reviewer finds issues, it can rewrite the symbolic layout plan and the corrected second pass is what the user receives.
+
+The sidecar is intended for prompts like:
+
+- `truck in lane 2 slot 3 on a highway`
+- typo recovery such as `turck` → nearest matching asset via catalog search
+
+### Run with Docker
+
+1. Copy [.env.example](.env.example) to `.env`
+2. Set `OPENROUTER_API_KEY`
+3. Start the stack:
+
+```bash
+docker compose up --build
+```
+
+Services:
+
+- app: http://localhost:8001
+- planner sidecar: http://localhost:8787
+
+### Docker services
+
+- [Dockerfile](Dockerfile): Python/FastAPI app
+- [planner-sidecar/Dockerfile](planner-sidecar/Dockerfile): TypeScript planning sidecar
+- [docker-compose.yml](docker-compose.yml): full stack wiring

@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 TEXT_MODEL = os.getenv("TEXT_MODEL", "openai/gpt-4.1-mini")
 IMAGE_MODEL = os.getenv("IMAGE_MODEL", "black-forest-labs/flux-schnell")
+REVIEW_MODEL = os.getenv("REVIEW_MODEL", os.getenv("TEXT_MODEL", "openai/gpt-4.1-mini"))
+ENABLE_INTERNAL_REVIEW = os.getenv("ENABLE_INTERNAL_REVIEW", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
 class ChatRequest(BaseModel):

@@ -1,11 +1,16 @@
 from __future__ import annotations
 import json, re, textwrap
+import os
 from typing import Any
 import httpx
-from models import OPENROUTER_API_KEY, TEXT_MODEL, IMAGE_MODEL, GenerateRequest
+from models import OPENROUTER_API_KEY, TEXT_MODEL, IMAGE_MODEL, REVIEW_MODEL, GenerateRequest
 from scene_engine import catalog, compact_json, normalize_scene, layout_planner_context
 from planning_agent import build_asset_registry_context, resolve_prompt_assets, validate_layout_plan
 import base64
+
+PLANNER_BACKEND = str(os.getenv("PLANNER_BACKEND", "direct") or "direct").strip().lower()
+PI_AGENT_URL = str(os.getenv("PI_AGENT_URL", "http://localhost:8787/plan") or "http://localhost:8787/plan").strip()
+PI_AGENT_REVIEW_URL = str(os.getenv("PI_AGENT_REVIEW_URL", PI_AGENT_URL.replace("/plan", "/review")) or PI_AGENT_URL.replace("/plan", "/review")).strip()
 
 SCENE_SYSTEM_PROMPT = textwrap.dedent("""
     You are a scene planner for automotive ODD pictograms.
@@ -125,6 +130,90 @@ def extract_json_object(text: str) -> dict[str, Any]:
     return json.loads(match.group(0))
 
 
+async def call_sidecar_scene_planner(user_payload: dict[str, Any]) -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=120) as client:
+        response = await client.post(PI_AGENT_URL, json=user_payload)
+
+    if response.status_code != 200:
+        raise RuntimeError(f"Planner sidecar error: {response.text[:400]}")
+
+    data = response.json()
+    raw_json = data.get("raw_json") if isinstance(data.get("raw_json"), dict) else extract_json_object(str(data.get("raw_text") or ""))
+    return {
+        "scene": normalize_scene(raw_json),
+        "raw_text": data.get("raw_text") or "",
+        "raw_json": raw_json,
+        "tool_trace": data.get("tool_trace") or [],
+    }
+
+
+async def call_sidecar_scene_reviewer(review_payload: dict[str, Any]) -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=180) as client:
+        response = await client.post(PI_AGENT_REVIEW_URL, json=review_payload)
+
+    if response.status_code != 200:
+        raise RuntimeError(f"Reviewer sidecar error: {response.text[:400]}")
+
+    data = response.json()
+    raw_json = data.get("raw_json") if isinstance(data.get("raw_json"), dict) else extract_json_object(str(data.get("raw_text") or ""))
+    return {
+        "raw_text": data.get("raw_text") or "",
+        "raw_json": raw_json,
+    }
+
+
+async def call_scene_reviewer(review_payload: dict[str, Any]) -> dict[str, Any]:
+    if PLANNER_BACKEND in {"sidecar", "pi-sidecar", "agent-sidecar"}:
+        return await call_sidecar_scene_reviewer(review_payload)
+
+    content: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": textwrap.dedent(
+                f"""
+                You are a multimodal scene reviewer for automotive pictograms.
+                Inspect the provided symbolic scene JSON and the rendered PNG.
+                If the scene is good, return:
+                {{"approved": true, "issues": [], "summary": "..."}}
+                If there are issues, return:
+                {{"approved": false, "issues": ["..."], "layoutPlan": {{... corrected symbolic layout plan ...}}, "summary": "..."}}
+                Output JSON only.
+
+                Review payload:
+                {compact_json(review_payload)}
+                """
+            ).strip(),
+        },
+    ]
+    image_data = str(review_payload.get("image") or "")
+    if image_data:
+        content.append({"type": "image_url", "image_url": {"url": image_data}})
+
+    payload = {
+        "model": REVIEW_MODEL,
+        "messages": [{"role": "user", "content": content}],
+        "temperature": 0.1,
+    }
+
+    async with httpx.AsyncClient(timeout=180) as client:
+        response = await client.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=openrouter_headers(),
+            json=payload,
+        )
+
+    if response.status_code != 200:
+        raise RuntimeError(f"Scene reviewer error: {response.text[:400]}")
+
+    data = response.json()
+    content_value = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    raw_json = extract_json_object(str(content_value))
+    return {
+        "raw_text": str(content_value),
+        "raw_json": raw_json,
+    }
+
+
 async def call_text_scene_planner(req: GenerateRequest) -> dict[str, Any]:
     if not OPENROUTER_API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY is not configured")
@@ -160,28 +249,35 @@ async def call_text_scene_planner(req: GenerateRequest) -> dict[str, Any]:
         ],
     }
 
-    payload = {
-        "model": TEXT_MODEL,
-        "messages": [
-            {"role": "system", "content": SCENE_SYSTEM_PROMPT},
-            {"role": "user", "content": compact_json(user_payload)},
-        ],
-        "temperature": 0.2,
-    }
+    tool_trace: list[dict[str, Any]] = []
+    if PLANNER_BACKEND in {"sidecar", "pi-sidecar", "agent-sidecar"}:
+        sidecar_result = await call_sidecar_scene_planner(user_payload)
+        planned = sidecar_result.get("raw_json") or {}
+        content = str(sidecar_result.get("raw_text") or "")
+        tool_trace = list(sidecar_result.get("tool_trace") or [])
+    else:
+        payload = {
+            "model": TEXT_MODEL,
+            "messages": [
+                {"role": "system", "content": SCENE_SYSTEM_PROMPT},
+                {"role": "user", "content": compact_json(user_payload)},
+            ],
+            "temperature": 0.2,
+        }
 
-    async with httpx.AsyncClient(timeout=90) as client:
-        response = await client.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers=openrouter_headers(),
-            json=payload,
-        )
+        async with httpx.AsyncClient(timeout=90) as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=openrouter_headers(),
+                json=payload,
+            )
 
-    if response.status_code != 200:
-        raise RuntimeError(f"Text planner error: {response.text[:400]}")
+        if response.status_code != 200:
+            raise RuntimeError(f"Text planner error: {response.text[:400]}")
 
-    data = response.json()
-    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-    planned = extract_json_object(content)
+        data = response.json()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        planned = extract_json_object(content)
     validated_layout_plan = validate_layout_plan(planned.get("layoutPlan"))
     if validated_layout_plan:
         planned["layoutPlan"] = validated_layout_plan
@@ -191,6 +287,7 @@ async def call_text_scene_planner(req: GenerateRequest) -> dict[str, Any]:
         "raw_text": content,
         "raw_json": planned,
         "asset_resolution": asset_resolution,
+        "tool_trace": tool_trace,
     }
 
 
